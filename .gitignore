@@ -16,6 +16,7 @@ local_settings.py
 
 # Media files (uploaded PDFs and rendered images)
 media/*.pdf
+media/pdfs/
 media/rendered/
 media/exports/
 
