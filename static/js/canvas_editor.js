@@ -1,0 +1,1321 @@
+/**
+ * Canvas Editor for PDF Alignment and Asset Overlay
+ * Uses Fabric.js for canvas manipulation
+ */
+
+// State
+let canvas = null;
+let currentMode = 'pan';
+let selectedSheet = null;
+let selectedAsset = null;
+let sheets = [];
+let assets = [];
+let calibrationPoints = [];
+
+// Crop/Cut tool state
+let cropRect = null;
+let cropStart = null;
+let isCropping = false;
+let sheetCutData = {};  // Store cut data per sheet for flipping
+
+// Initialize canvas
+document.addEventListener('DOMContentLoaded', function() {
+    initCanvas();
+    loadProjectData();
+});
+
+function initCanvas() {
+    const container = document.getElementById('canvas-container');
+    const containerRect = container.getBoundingClientRect();
+
+    // Create canvas element
+    const canvasEl = document.createElement('canvas');
+    canvasEl.id = 'main-canvas';
+    container.appendChild(canvasEl);
+
+    // Initialize Fabric canvas
+    canvas = new fabric.Canvas('main-canvas', {
+        width: containerRect.width,
+        height: containerRect.height,
+        backgroundColor: '#e0e0e0',
+        selection: false
+    });
+
+    // Setup event handlers
+    setupCanvasEvents();
+    setupKeyboardShortcuts();
+
+    // Handle window resize
+    window.addEventListener('resize', function() {
+        const rect = container.getBoundingClientRect();
+        canvas.setDimensions({ width: rect.width, height: rect.height });
+        canvas.renderAll();
+    });
+}
+
+function setupCanvasEvents() {
+    let isPanning = false;
+    let lastPosX, lastPosY;
+
+    canvas.on('mouse:down', function(opt) {
+        const evt = opt.e;
+        console.log('mouse:down event, currentMode:', currentMode);
+
+        if (currentMode === 'pan') {
+            isPanning = true;
+            lastPosX = evt.clientX;
+            lastPosY = evt.clientY;
+            canvas.defaultCursor = 'grabbing';
+        } else if (currentMode === 'calibrate') {
+            handleCalibrationClick(opt);
+        } else if (currentMode === 'origin') {
+            handleOriginClick(opt);
+        } else if (currentMode === 'select') {
+            handleSelectClick(opt);
+        } else if (currentMode === 'crop') {
+            handleCropClick(opt);
+        }
+    });
+
+    canvas.on('mouse:move', function(opt) {
+        updateCursorPosition(opt);
+
+        if (isPanning && currentMode === 'pan') {
+            const evt = opt.e;
+            const vpt = canvas.viewportTransform;
+            vpt[4] += evt.clientX - lastPosX;
+            vpt[5] += evt.clientY - lastPosY;
+            canvas.requestRenderAll();
+            lastPosX = evt.clientX;
+            lastPosY = evt.clientY;
+        }
+
+        // Handle crop drag
+        if (currentMode === 'crop') {
+            handleCropMove(opt);
+        }
+    });
+
+    canvas.on('mouse:up', function(opt) {
+        isPanning = false;
+        if (currentMode === 'pan') {
+            canvas.defaultCursor = 'grab';
+        }
+
+        // Handle crop end
+        if (currentMode === 'crop' && isCropping) {
+            handleCropEnd(opt);
+        }
+    });
+
+    canvas.on('mouse:wheel', function(opt) {
+        const delta = opt.e.deltaY;
+        let zoom = canvas.getZoom();
+        zoom *= 0.999 ** delta;
+        if (zoom > 5) zoom = 5;
+        if (zoom < 0.1) zoom = 0.1;
+
+        canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+        opt.e.preventDefault();
+        opt.e.stopPropagation();
+
+        updateZoomDisplay();
+    });
+
+    canvas.on('object:moving', function(opt) {
+        const obj = opt.target;
+        if (obj.assetData) {
+            // Asset is being dragged
+            updateAssetPositionFromCanvas(obj);
+        } else if (obj.sheetData) {
+            // Sheet is being dragged
+            updateSheetPositionFromCanvas(obj);
+        }
+    });
+
+    // Sync selection when user clicks on an object
+    canvas.on('selection:created', function(opt) {
+        const obj = opt.selected[0];
+        if (obj && obj.sheetData) {
+            selectSheet(obj.sheetData.id);
+        }
+    });
+
+    canvas.on('selection:updated', function(opt) {
+        const obj = opt.selected[0];
+        if (obj && obj.sheetData) {
+            selectSheet(obj.sheetData.id);
+        }
+    });
+}
+
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', function(e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        switch(e.key) {
+            case '1':
+                setMode('pan');
+                break;
+            case '2':
+                setMode('select');
+                break;
+            case '3':
+                setMode('crop');
+                break;
+            case '4':
+                setMode('calibrate');
+                break;
+            case '5':
+                setMode('origin');
+                break;
+            case 'Escape':
+                clearSelection();
+                break;
+            case '+':
+            case '=':
+                zoomIn();
+                break;
+            case '-':
+                zoomOut();
+                break;
+        }
+    });
+}
+
+// Mode Management
+function setMode(mode) {
+    console.log('setMode called with:', mode, '(previous mode:', currentMode + ')');
+    currentMode = mode;
+
+    // Update button states
+    document.querySelectorAll('.tool-btn[data-mode]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    // Update cursor and object selectability
+    const isSelectMode = (mode === 'select');
+
+    switch(mode) {
+        case 'pan':
+            canvas.defaultCursor = 'grab';
+            canvas.selection = false;
+            break;
+        case 'select':
+            canvas.defaultCursor = 'default';
+            canvas.selection = true;
+            break;
+        case 'crop':
+            canvas.defaultCursor = 'crosshair';
+            canvas.selection = false;  // Prevent box selection
+            break;
+        case 'calibrate':
+            canvas.defaultCursor = 'crosshair';
+            calibrationPoints = [];
+            break;
+        case 'origin':
+            canvas.defaultCursor = 'crosshair';
+            break;
+    }
+
+    // Update selectability of all sheet objects
+    // Sheets are selectable only in select mode
+    // Sheets must be evented in crop mode to detect clicks for cut lines
+    const isCropMode = (mode === 'crop');
+    canvas.getObjects().forEach(obj => {
+        if (obj.sheetData) {
+            obj.selectable = isSelectMode;
+            obj.evented = isSelectMode || isCropMode;
+        }
+    });
+    canvas.renderAll();
+
+    document.getElementById('current-mode').textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+}
+
+// Data Loading
+async function loadProjectData() {
+    try {
+        // Load sheets
+        const sheetsResponse = await fetch(`/api/projects/${PROJECT_ID}/sheets/`);
+        sheets = await sheetsResponse.json();
+
+        // Load assets
+        const assetsResponse = await fetch(`/api/projects/${PROJECT_ID}/assets/`);
+        assets = await assetsResponse.json();
+
+        renderSheetLayers();
+        renderAssetList();
+        renderSheetsOnCanvas();
+        renderAssetsOnCanvas();
+
+    } catch (error) {
+        console.error('Error loading project data:', error);
+    }
+}
+
+function renderSheetLayers() {
+    const container = document.getElementById('sheet-layers');
+    container.innerHTML = '';
+
+    sheets.forEach(sheet => {
+        const div = document.createElement('div');
+        div.className = 'layer-item';
+        div.dataset.sheetId = sheet.id;
+        div.innerHTML = `
+            <input type="checkbox" class="layer-visibility" checked onchange="toggleSheetVisibility(${sheet.id}, this.checked)">
+            <span>${sheet.name}</span>
+        `;
+        div.addEventListener('click', (e) => {
+            if (e.target.type !== 'checkbox') {
+                selectSheet(sheet.id);
+            }
+        });
+        container.appendChild(div);
+    });
+}
+
+function renderAssetList() {
+    const container = document.getElementById('asset-list');
+    container.innerHTML = '';
+
+    assets.forEach(asset => {
+        const div = document.createElement('div');
+        div.className = 'asset-item' + (asset.is_adjusted ? ' adjusted' : '');
+        div.innerHTML = `
+            <strong>${asset.asset_id}</strong>
+            ${asset.name ? `<br><small>${asset.name}</small>` : ''}
+            <div class="coordinates">X: ${asset.current_x.toFixed(2)}m, Y: ${asset.current_y.toFixed(2)}m</div>
+        `;
+        div.addEventListener('click', () => selectAsset(asset.id));
+        container.appendChild(div);
+    });
+
+    // Setup search filter
+    document.getElementById('asset-search').addEventListener('input', function(e) {
+        const query = e.target.value.toLowerCase();
+        document.querySelectorAll('.asset-item').forEach((item, index) => {
+            const asset = assets[index];
+            const matches = asset.asset_id.toLowerCase().includes(query) ||
+                          (asset.name && asset.name.toLowerCase().includes(query));
+            item.style.display = matches ? '' : 'none';
+        });
+    });
+}
+
+function renderSheetsOnCanvas() {
+    sheets.forEach((sheet, index) => {
+        if (sheet.rendered_image_url) {
+            fabric.Image.fromURL(sheet.rendered_image_url, function(img) {
+                // If no offset set, offset sheets so they don't stack
+                let left = sheet.offset_x;
+                let top = sheet.offset_y;
+                if (left === 0 && top === 0 && index > 0) {
+                    left = index * 50;  // Offset subsequent sheets
+                    top = index * 50;
+                }
+
+                img.set({
+                    left: left,
+                    top: top,
+                    angle: sheet.rotation,
+                    selectable: currentMode === 'select',
+                    evented: true,
+                    // Completely disable all controls and resize handles
+                    hasControls: false,
+                    hasBorders: true,
+                    hasRotatingPoint: false,
+                    lockScalingX: true,
+                    lockScalingY: true,
+                    lockUniScaling: true,
+                    lockRotation: true,
+                    // Ensure corners are not visible even if hasControls fails
+                    cornerSize: 0,
+                    transparentCorners: true,
+                    borderColor: '#3498db',
+                    // Disable all control visibility
+                    setControlsVisibility: function() {
+                        this.setControlVisible('tl', false);
+                        this.setControlVisible('tr', false);
+                        this.setControlVisible('bl', false);
+                        this.setControlVisible('br', false);
+                        this.setControlVisible('ml', false);
+                        this.setControlVisible('mt', false);
+                        this.setControlVisible('mr', false);
+                        this.setControlVisible('mb', false);
+                        this.setControlVisible('mtr', false);
+                    }
+                });
+                // Call to hide all controls
+                img.setControlsVisibility({
+                    tl: false, tr: false, bl: false, br: false,
+                    ml: false, mt: false, mr: false, mb: false,
+                    mtr: false
+                });
+                img.sheetData = sheet;
+                canvas.add(img);
+                canvas.sendToBack(img);
+                canvas.renderAll();
+            }, { crossOrigin: 'anonymous' });
+        }
+    });
+}
+
+function renderAssetsOnCanvas() {
+    assets.forEach(asset => {
+        const pixelX = PROJECT_DATA.origin_x + (asset.current_x * PROJECT_DATA.pixels_per_meter);
+        const pixelY = PROJECT_DATA.origin_y + (asset.current_y * PROJECT_DATA.pixels_per_meter);
+
+        const assetObj = createAssetShape(asset, pixelX, pixelY);
+        assetObj.assetData = asset;
+        canvas.add(assetObj);
+    });
+
+    canvas.renderAll();
+}
+
+function createAssetShape(asset, x, y) {
+    const type = asset.asset_type_data;
+    const color = type ? type.color : '#FF0000';
+    const size = type ? type.size : 20;
+    const shape = type ? type.icon_shape : 'circle';
+
+    let obj;
+
+    switch(shape) {
+        case 'circle':
+            obj = new fabric.Circle({
+                radius: size / 2,
+                fill: color,
+                stroke: '#000',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center'
+            });
+            break;
+        case 'square':
+            obj = new fabric.Rect({
+                width: size,
+                height: size,
+                fill: color,
+                stroke: '#000',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center'
+            });
+            break;
+        case 'triangle':
+            obj = new fabric.Triangle({
+                width: size,
+                height: size,
+                fill: color,
+                stroke: '#000',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center'
+            });
+            break;
+        case 'diamond':
+            obj = new fabric.Rect({
+                width: size * 0.7,
+                height: size * 0.7,
+                fill: color,
+                stroke: '#000',
+                strokeWidth: 1,
+                angle: 45,
+                originX: 'center',
+                originY: 'center'
+            });
+            break;
+        case 'star':
+            const points = createStarPoints(0, 0, 5, size / 2, size / 4);
+            obj = new fabric.Polygon(points, {
+                fill: color,
+                stroke: '#000',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center'
+            });
+            break;
+        default:
+            obj = new fabric.Circle({
+                radius: size / 2,
+                fill: color,
+                stroke: '#000',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center'
+            });
+    }
+
+    obj.set({
+        left: x,
+        top: y,
+        selectable: true,
+        hasControls: false
+    });
+
+    // Add label
+    const label = new fabric.Text(asset.asset_id, {
+        fontSize: 10,
+        fill: '#000',
+        left: x + size / 2 + 3,
+        top: y - 5,
+        selectable: false
+    });
+
+    const group = new fabric.Group([obj, label], {
+        left: x,
+        top: y,
+        selectable: true,
+        hasControls: false,
+        hasBorders: true,
+        lockScalingX: true,
+        lockScalingY: true,
+        lockRotation: true,
+        cornerSize: 0
+    });
+    // Hide all control handles
+    group.setControlsVisibility({
+        tl: false, tr: false, bl: false, br: false,
+        ml: false, mt: false, mr: false, mb: false,
+        mtr: false
+    });
+
+    return group;
+}
+
+function createStarPoints(cx, cy, spikes, outerRadius, innerRadius) {
+    const points = [];
+    const step = Math.PI / spikes;
+
+    for (let i = 0; i < 2 * spikes; i++) {
+        const radius = i % 2 === 0 ? outerRadius : innerRadius;
+        const angle = i * step - Math.PI / 2;
+        points.push({
+            x: cx + Math.cos(angle) * radius,
+            y: cy + Math.sin(angle) * radius
+        });
+    }
+
+    return points;
+}
+
+// Selection Handlers
+function handleSelectClick(opt) {
+    const target = opt.target;
+
+    if (target) {
+        if (target.assetData) {
+            selectAsset(target.assetData.id);
+        } else if (target.sheetData) {
+            selectSheet(target.sheetData.id);
+        }
+    } else {
+        clearSelection();
+    }
+}
+
+function selectSheet(sheetId) {
+    selectedSheet = sheets.find(s => s.id === sheetId);
+    selectedAsset = null;
+
+    // Update layer list
+    document.querySelectorAll('.layer-item').forEach(item => {
+        item.classList.toggle('selected', parseInt(item.dataset.sheetId) === sheetId);
+    });
+
+    // Show properties
+    document.getElementById('no-selection').style.display = 'none';
+    document.getElementById('sheet-properties').style.display = 'block';
+    document.getElementById('asset-properties').style.display = 'none';
+
+    // Populate fields
+    document.getElementById('sheet-name').value = selectedSheet.name;
+    document.getElementById('sheet-offset-x').value = selectedSheet.offset_x;
+    document.getElementById('sheet-offset-y').value = selectedSheet.offset_y;
+    document.getElementById('sheet-rotation').value = selectedSheet.rotation;
+    document.getElementById('sheet-zindex').value = selectedSheet.z_index;
+}
+
+function selectAsset(assetId) {
+    selectedAsset = assets.find(a => a.id === assetId);
+    selectedSheet = null;
+
+    // Highlight on canvas
+    canvas.getObjects().forEach(obj => {
+        if (obj.assetData && obj.assetData.id === assetId) {
+            canvas.setActiveObject(obj);
+        }
+    });
+
+    // Show properties
+    document.getElementById('no-selection').style.display = 'none';
+    document.getElementById('sheet-properties').style.display = 'none';
+    document.getElementById('asset-properties').style.display = 'block';
+
+    // Populate fields
+    document.getElementById('asset-id').value = selectedAsset.asset_id;
+    document.getElementById('asset-name').value = selectedAsset.name || '';
+    document.getElementById('asset-orig-x').value = selectedAsset.original_x;
+    document.getElementById('asset-orig-y').value = selectedAsset.original_y;
+    document.getElementById('asset-adj-x').value = selectedAsset.adjusted_x || selectedAsset.original_x;
+    document.getElementById('asset-adj-y').value = selectedAsset.adjusted_y || selectedAsset.original_y;
+
+    showTab('properties');
+}
+
+function clearSelection() {
+    selectedSheet = null;
+    selectedAsset = null;
+    canvas.discardActiveObject();
+    canvas.renderAll();
+
+    document.querySelectorAll('.layer-item').forEach(item => {
+        item.classList.remove('selected');
+    });
+
+    document.getElementById('no-selection').style.display = 'block';
+    document.getElementById('sheet-properties').style.display = 'none';
+    document.getElementById('asset-properties').style.display = 'none';
+}
+
+// Calibration
+function handleCalibrationClick(opt) {
+    const pointer = canvas.getPointer(opt.e);
+    calibrationPoints.push({ x: pointer.x, y: pointer.y });
+
+    // Draw calibration point marker
+    const marker = new fabric.Circle({
+        radius: 5,
+        fill: '#FF0000',
+        left: pointer.x,
+        top: pointer.y,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        calibrationMarker: true
+    });
+    canvas.add(marker);
+
+    if (calibrationPoints.length === 2) {
+        // Calculate pixel distance
+        const dx = calibrationPoints[1].x - calibrationPoints[0].x;
+        const dy = calibrationPoints[1].y - calibrationPoints[0].y;
+        const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+
+        document.getElementById('pixel-distance').value = pixelDistance.toFixed(2);
+        document.getElementById('calibrateModal').style.display = 'block';
+    }
+}
+
+async function applyCalibration() {
+    const pixelDistance = parseFloat(document.getElementById('pixel-distance').value);
+    const realDistance = parseFloat(document.getElementById('real-distance').value);
+
+    if (!realDistance || realDistance <= 0) {
+        alert('Please enter a valid real-world distance');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/calibrate/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pixel_distance: pixelDistance,
+                real_distance: realDistance
+            })
+        });
+
+        const result = await response.json();
+        PROJECT_DATA.pixels_per_meter = result.pixels_per_meter;
+
+        // Clear calibration markers
+        canvas.getObjects().forEach(obj => {
+            if (obj.calibrationMarker) canvas.remove(obj);
+        });
+
+        calibrationPoints = [];
+        hideCalibrateModal();
+        setMode('pan');
+
+        // Refresh assets with new scale
+        refreshAssets();
+
+    } catch (error) {
+        console.error('Calibration error:', error);
+        alert('Error applying calibration');
+    }
+}
+
+function hideCalibrateModal() {
+    document.getElementById('calibrateModal').style.display = 'none';
+}
+
+// Origin Setting
+async function handleOriginClick(opt) {
+    const pointer = canvas.getPointer(opt.e);
+
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/calibrate/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                origin_x: pointer.x,
+                origin_y: pointer.y
+            })
+        });
+
+        const result = await response.json();
+        PROJECT_DATA.origin_x = result.origin_x;
+        PROJECT_DATA.origin_y = result.origin_y;
+
+        // Draw origin marker
+        drawOriginMarker(pointer.x, pointer.y);
+
+        setMode('pan');
+        refreshAssets();
+
+    } catch (error) {
+        console.error('Origin setting error:', error);
+    }
+}
+
+function drawOriginMarker(x, y) {
+    // Remove existing origin marker
+    canvas.getObjects().forEach(obj => {
+        if (obj.originMarker) canvas.remove(obj);
+    });
+
+    const marker = new fabric.Group([
+        new fabric.Line([x - 20, y, x + 20, y], { stroke: '#0000FF', strokeWidth: 2 }),
+        new fabric.Line([x, y - 20, x, y + 20], { stroke: '#0000FF', strokeWidth: 2 }),
+        new fabric.Circle({ radius: 8, fill: 'transparent', stroke: '#0000FF', strokeWidth: 2, left: x, top: y, originX: 'center', originY: 'center' })
+    ], { selectable: false, originMarker: true });
+
+    canvas.add(marker);
+    canvas.renderAll();
+}
+
+// Asset Position Updates
+function updateAssetPositionFromCanvas(obj) {
+    if (!obj.assetData) return;
+
+    // Convert pixel position back to meters
+    const pixelX = obj.left;
+    const pixelY = obj.top;
+
+    const meterX = (pixelX - PROJECT_DATA.origin_x) / PROJECT_DATA.pixels_per_meter;
+    const meterY = (pixelY - PROJECT_DATA.origin_y) / PROJECT_DATA.pixels_per_meter;
+
+    // Update the property panel if this asset is selected
+    if (selectedAsset && selectedAsset.id === obj.assetData.id) {
+        document.getElementById('asset-adj-x').value = meterX.toFixed(3);
+        document.getElementById('asset-adj-y').value = meterY.toFixed(3);
+    }
+}
+
+async function saveAssetAdjustment() {
+    if (!selectedAsset) return;
+
+    const newX = parseFloat(document.getElementById('asset-adj-x').value);
+    const newY = parseFloat(document.getElementById('asset-adj-y').value);
+    const notes = document.getElementById('asset-notes').value;
+
+    try {
+        const response = await fetch(`/api/assets/${selectedAsset.id}/adjust/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ x: newX, y: newY, notes: notes })
+        });
+
+        if (response.ok) {
+            const updated = await response.json();
+            // Update local data
+            const index = assets.findIndex(a => a.id === selectedAsset.id);
+            assets[index] = updated;
+            selectedAsset = updated;
+
+            renderAssetList();
+            refreshAssets();
+            alert('Asset adjustment saved');
+        }
+    } catch (error) {
+        console.error('Error saving adjustment:', error);
+        alert('Error saving adjustment');
+    }
+}
+
+// Sheet Position Updates
+function updateSheetPositionFromCanvas(obj) {
+    if (!obj.sheetData) return;
+
+    // Auto-save position changes using the object's sheet data directly
+    const sheetId = obj.sheetData.id;
+    saveSheetPosition(sheetId, obj.left, obj.top);
+}
+
+async function saveSheetPosition(sheetId, x, y) {
+    try {
+        const response = await fetch(`/api/sheets/${sheetId}/`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ offset_x: x, offset_y: y })
+        });
+
+        if (response.ok) {
+            const updated = await response.json();
+            const index = sheets.findIndex(s => s.id === sheetId);
+            if (index >= 0) {
+                sheets[index] = updated;
+                if (selectedSheet && selectedSheet.id === sheetId) {
+                    selectedSheet = updated;
+                    document.getElementById('sheet-offset-x').value = updated.offset_x;
+                    document.getElementById('sheet-offset-y').value = updated.offset_y;
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error saving sheet position:', error);
+    }
+}
+
+async function updateSheetProperty(property, value, reload = true) {
+    if (!selectedSheet) return;
+
+    const data = {};
+    data[property] = value;
+
+    try {
+        const response = await fetch(`/api/sheets/${selectedSheet.id}/`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok && reload) {
+            const updated = await response.json();
+            const index = sheets.findIndex(s => s.id === selectedSheet.id);
+            sheets[index] = updated;
+            selectedSheet = updated;
+        }
+    } catch (error) {
+        console.error('Error updating sheet:', error);
+    }
+}
+
+// Refresh Functions
+function refreshAssets() {
+    // Remove existing asset objects
+    canvas.getObjects().forEach(obj => {
+        if (obj.assetData) canvas.remove(obj);
+    });
+
+    // Re-render
+    renderAssetsOnCanvas();
+}
+
+function toggleSheetVisibility(sheetId, visible) {
+    canvas.getObjects().forEach(obj => {
+        if (obj.sheetData && obj.sheetData.id === sheetId) {
+            obj.visible = visible;
+        }
+    });
+    canvas.renderAll();
+}
+
+// Zoom Controls
+function zoomIn() {
+    let zoom = canvas.getZoom() * 1.2;
+    if (zoom > 5) zoom = 5;
+    canvas.setZoom(zoom);
+    updateZoomDisplay();
+}
+
+function zoomOut() {
+    let zoom = canvas.getZoom() / 1.2;
+    if (zoom < 0.1) zoom = 0.1;
+    canvas.setZoom(zoom);
+    updateZoomDisplay();
+}
+
+function zoomFit() {
+    // Calculate bounds of all objects
+    const objects = canvas.getObjects().filter(obj => obj.sheetData);
+    if (objects.length === 0) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    objects.forEach(obj => {
+        const bounds = obj.getBoundingRect();
+        minX = Math.min(minX, bounds.left);
+        minY = Math.min(minY, bounds.top);
+        maxX = Math.max(maxX, bounds.left + bounds.width);
+        maxY = Math.max(maxY, bounds.top + bounds.height);
+    });
+
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+
+    const zoomX = canvas.width / contentWidth * 0.9;
+    const zoomY = canvas.height / contentHeight * 0.9;
+    const zoom = Math.min(zoomX, zoomY, 1);
+
+    canvas.setZoom(zoom);
+    canvas.absolutePan({
+        x: minX * zoom - (canvas.width - contentWidth * zoom) / 2,
+        y: minY * zoom - (canvas.height - contentHeight * zoom) / 2
+    });
+
+    updateZoomDisplay();
+}
+
+function resetView() {
+    canvas.setZoom(1);
+    canvas.absolutePan({ x: 0, y: 0 });
+    updateZoomDisplay();
+}
+
+function updateZoomDisplay() {
+    const zoom = Math.round(canvas.getZoom() * 100);
+    document.getElementById('zoom-level').textContent = zoom;
+    document.getElementById('zoom-display').textContent = zoom + '%';
+}
+
+function updateCursorPosition(opt) {
+    const pointer = canvas.getPointer(opt.e);
+
+    // Convert to meters if calibrated
+    const meterX = (pointer.x - PROJECT_DATA.origin_x) / PROJECT_DATA.pixels_per_meter;
+    const meterY = (pointer.y - PROJECT_DATA.origin_y) / PROJECT_DATA.pixels_per_meter;
+
+    document.getElementById('cursor-position').textContent =
+        `${meterX.toFixed(2)}m, ${meterY.toFixed(2)}m`;
+}
+
+// Tab Switching
+function showTab(tabName) {
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.toggle('active', content.id === tabName + '-tab');
+    });
+}
+
+// Modal Functions
+function showUploadModal() {
+    document.getElementById('uploadModal').style.display = 'block';
+}
+
+function hideUploadModal() {
+    document.getElementById('uploadModal').style.display = 'none';
+}
+
+function showImportModal() {
+    document.getElementById('importModal').style.display = 'block';
+}
+
+function hideImportModal() {
+    document.getElementById('importModal').style.display = 'none';
+}
+
+// Form Handlers
+document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/sheets/`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (response.ok) {
+            hideUploadModal();
+            loadProjectData();
+        } else {
+            const error = await response.json();
+            alert('Error: ' + JSON.stringify(error));
+        }
+    } catch (error) {
+        console.error('Upload error:', error);
+    }
+});
+
+document.getElementById('importForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/import-csv/`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+            alert(`Import complete:\n${result.created} created\n${result.updated} updated\n${result.errors.length} errors`);
+            hideImportModal();
+            loadProjectData();
+        } else {
+            alert('Error: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Import error:', error);
+    }
+});
+
+// Export Functions
+async function exportProject() {
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/export/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+            alert('Export complete! Files saved to: ' + result.exports.map(e => e.output_path).join(', '));
+        } else {
+            alert('Export error: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Export error:', error);
+    }
+}
+
+function downloadReport() {
+    window.open(`/api/projects/${PROJECT_ID}/adjustment-report/?format=csv`, '_blank');
+}
+
+// Cut Line Tool - draws a line to hide one side of a sheet
+let cutLine = null;
+let cutLineStart = null;
+let targetSheetObj = null;
+
+function handleCropClick(opt) {
+    const pointer = canvas.getPointer(opt.e);
+
+    console.log('handleCropClick called, pointer:', pointer, 'isCropping:', isCropping);
+
+    // Find sheet under click - try multiple methods for reliability
+    let clickedSheetObj = null;
+
+    // Method 1: Use opt.target if available
+    if (opt.target && opt.target.sheetData) {
+        clickedSheetObj = opt.target;
+        console.log('Method 1 - opt.target:', opt.target.sheetData.name);
+    }
+
+    // Method 2: Use findTarget with event
+    if (!clickedSheetObj) {
+        const foundObj = canvas.findTarget(opt.e, true);
+        if (foundObj && foundObj.sheetData) {
+            clickedSheetObj = foundObj;
+            console.log('Method 2 - findTarget:', foundObj.sheetData.name);
+        }
+    }
+
+    // Method 3: Manually check all sheets using object-space coordinates
+    if (!clickedSheetObj) {
+        canvas.getObjects().forEach(obj => {
+            if (obj.sheetData) {
+                // Check if point is within object bounds (object space)
+                const objLeft = obj.left;
+                const objTop = obj.top;
+                const objRight = objLeft + obj.width * (obj.scaleX || 1);
+                const objBottom = objTop + obj.height * (obj.scaleY || 1);
+
+                if (pointer.x >= objLeft && pointer.x <= objRight &&
+                    pointer.y >= objTop && pointer.y <= objBottom) {
+                    clickedSheetObj = obj;
+                    console.log('Method 3 - manual bounds:', obj.sheetData.name);
+                }
+            }
+        });
+    }
+
+    console.log('All sheets on canvas:', canvas.getObjects().filter(o => o.sheetData).length);
+
+    if (!isCropping) {
+        // Start cut line
+        if (!clickedSheetObj) {
+            console.log('Cut line must start on a sheet - no sheet found under click');
+            console.log('Available sheets:', canvas.getObjects().filter(o => o.sheetData).map(o => o.sheetData.name));
+            return;
+        }
+
+        targetSheetObj = clickedSheetObj;
+        selectSheet(targetSheetObj.sheetData.id);
+        isCropping = true;
+        cutLineStart = pointer;
+
+        console.log('Starting cut line at:', pointer);
+
+        // Draw the cut line
+        cutLine = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
+            stroke: '#ff0000',
+            strokeWidth: 3,
+            strokeDashArray: [10, 5],
+            selectable: false,
+            evented: false
+        });
+        canvas.add(cutLine);
+        canvas.bringToFront(cutLine);
+        canvas.renderAll();
+        console.log('Cut line added to canvas');
+    }
+}
+
+function handleCropMove(opt) {
+    if (!isCropping || !cutLine || !cutLineStart) return;
+
+    const pointer = canvas.getPointer(opt.e);
+    cutLine.set({ x2: pointer.x, y2: pointer.y });
+    canvas.renderAll();
+}
+
+// Debug: Log mode changes
+const originalSetMode = setMode;
+// Overwrite setMode to add logging (will be defined later in file, so we patch it at load time)
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Canvas editor loaded, currentMode:', currentMode);
+});
+
+function handleCropEnd(opt) {
+    if (!isCropping || !cutLine || !cutLineStart || !targetSheetObj) return;
+
+    const pointer = canvas.getPointer(opt.e);
+
+    // Calculate line length
+    const dx = pointer.x - cutLineStart.x;
+    const dy = pointer.y - cutLineStart.y;
+    const lineLength = Math.sqrt(dx * dx + dy * dy);
+
+    if (lineLength > 20) {
+        // Apply cut mask to the sheet
+        applyCutMask(targetSheetObj, cutLineStart, pointer);
+    }
+
+    // Clean up
+    canvas.remove(cutLine);
+    cutLine = null;
+    cutLineStart = null;
+    targetSheetObj = null;
+    isCropping = false;
+}
+
+function applyCutMask(sheetObj, p1, p2) {
+    // Store cut data for flipping later
+    const cutData = {
+        p1: { x: p1.x, y: p1.y },
+        p2: { x: p2.x, y: p2.y },
+        flipped: false
+    };
+    sheetCutData[sheetObj.sheetData.id] = cutData;
+
+    applyCutMaskWithDirection(sheetObj, p1, p2, false);
+    saveCutData(sheetObj.sheetData.id, cutData);
+    console.log('Cut applied to sheet:', sheetObj.sheetData.name);
+}
+
+function applyCutMaskWithDirection(sheetObj, p1, p2, flipped) {
+    // Get the sheet's dimensions in local coordinates
+    const imgWidth = sheetObj.width;
+    const imgHeight = sheetObj.height;
+
+    // Convert canvas coordinates to object-local coordinates
+    // Must use Fabric.js transform matrix for proper handling of rotation/scale
+    const toLocal = (canvasX, canvasY) => {
+        const point = new fabric.Point(canvasX, canvasY);
+        // Get the inverse of the object's transform matrix
+        const invertedMatrix = fabric.util.invertTransform(sheetObj.calcTransformMatrix());
+        // Transform the point from canvas space to object space
+        const transformed = fabric.util.transformPoint(point, invertedMatrix);
+        return { x: transformed.x, y: transformed.y };
+    };
+
+    const localP1 = toLocal(p1.x, p1.y);
+    const localP2 = toLocal(p2.x, p2.y);
+
+    // Calculate the line direction and perpendicular
+    const dx = localP2.x - localP1.x;
+    const dy = localP2.y - localP1.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) return;
+
+    // Normalize
+    const nx = dx / len;
+    const ny = dy / len;
+
+    // Calculate perpendicular (initially use right-hand rule: 90 degrees CCW)
+    let px = -ny;
+    let py = nx;
+
+    // Determine which side of the line the sheet center is on
+    // Sheet center in local coordinates is at (imgWidth/2, imgHeight/2) relative to the image origin
+    // But for Fabric.js images with default origin, the local (0,0) is at the image center
+    // So we need to check which side of the line the origin (0,0) is on
+    const sheetCenterX = 0;  // Local center of Fabric.js image
+    const sheetCenterY = 0;
+
+    // Calculate midpoint of the cut line
+    const midX = (localP1.x + localP2.x) / 2;
+    const midY = (localP1.y + localP2.y) / 2;
+
+    // Vector from line midpoint to sheet center
+    const toSheetCenterX = sheetCenterX - midX;
+    const toSheetCenterY = sheetCenterY - midY;
+
+    // Dot product with perpendicular tells us which side the center is on
+    const dotProduct = toSheetCenterX * px + toSheetCenterY * py;
+
+    // If dot product is negative, the center is on the opposite side of perpendicular
+    // So flip the perpendicular to point toward the center
+    if (dotProduct < 0) {
+        px = -px;
+        py = -py;
+    }
+
+    // Now apply the user's flip preference
+    if (flipped) {
+        px = -px;
+        py = -py;
+    }
+
+    console.log('Cut direction - perpendicular:', {px, py}, 'dotProduct:', dotProduct, 'flipped:', flipped);
+
+    // Use image dimensions for padding to ensure full coverage
+    // Image dimensions in local space
+    const padding = Math.max(imgWidth, imgHeight) * 1.5;
+
+    // Line endpoints extended
+    const l1x = localP1.x - nx * padding;
+    const l1y = localP1.y - ny * padding;
+    const l2x = localP2.x + nx * padding;
+    const l2y = localP2.y + ny * padding;
+
+    // Points on the "keep" side (extends perpendicular to the line)
+    const k1x = l1x + px * padding;
+    const k1y = l1y + py * padding;
+    const k2x = l2x + px * padding;
+    const k2y = l2y + py * padding;
+
+    const clipPoints = [
+        { x: l1x, y: l1y },
+        { x: l2x, y: l2y },
+        { x: k2x, y: k2y },
+        { x: k1x, y: k1y }
+    ];
+
+    // Create clip path polygon - use object-relative coordinates
+    const clipPath = new fabric.Polygon(clipPoints, {
+        originX: 'left',
+        originY: 'top',
+        absolutePositioned: false
+    });
+
+    sheetObj.clipPath = clipPath;
+    // Ensure clip path bounds are calculated
+    if (sheetObj.clipPath.setCoords) {
+        sheetObj.clipPath.setCoords();
+    }
+    sheetObj.dirty = true;
+    canvas.renderAll();
+    console.log('Clip applied with points:', clipPoints);
+}
+
+async function saveCutData(sheetId, cutData) {
+    try {
+        // Store cut data in the crop_x field as JSON string (temporary solution)
+        // A better solution would add a dedicated field for cut masks
+        const response = await fetch(`/api/sheets/${sheetId}/`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                crop_x: cutData.p1.x,
+                crop_y: cutData.p1.y,
+                crop_width: cutData.p2.x,  // Repurposing as p2.x
+                crop_height: cutData.p2.y   // Repurposing as p2.y
+            })
+        });
+        if (response.ok) {
+            console.log('Cut data saved');
+        }
+    } catch (error) {
+        console.error('Error saving cut data:', error);
+    }
+}
+
+function clearSheetCut(sheetId) {
+    // Find the sheet object and remove its clip path
+    canvas.getObjects().forEach(obj => {
+        if (obj.sheetData && obj.sheetData.id === sheetId) {
+            obj.clipPath = null;
+            canvas.renderAll();
+        }
+    });
+}
+
+function clearSelectedSheetCut() {
+    if (!selectedSheet) {
+        console.log('No sheet selected for clearing cut');
+        return;
+    }
+    clearSheetCut(selectedSheet.id);
+    delete sheetCutData[selectedSheet.id];
+
+    // Clear saved cut data
+    fetch(`/api/sheets/${selectedSheet.id}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            crop_x: 0,
+            crop_y: 0,
+            crop_width: 0,
+            crop_height: 0
+        })
+    });
+    console.log('Cut cleared from sheet:', selectedSheet.name);
+}
+
+function flipSelectedSheetCut() {
+    if (!selectedSheet) {
+        console.log('No sheet selected for flip');
+        return;
+    }
+
+    const cutData = sheetCutData[selectedSheet.id];
+    if (!cutData) {
+        console.log('No cut data to flip');
+        return;
+    }
+
+    // Find the sheet object
+    let sheetObj = null;
+    canvas.getObjects().forEach(obj => {
+        if (obj.sheetData && obj.sheetData.id === selectedSheet.id) {
+            sheetObj = obj;
+        }
+    });
+
+    if (!sheetObj) return;
+
+    // Flip the cut direction
+    cutData.flipped = !cutData.flipped;
+    sheetCutData[selectedSheet.id] = cutData;
+
+    // Reapply with flipped direction
+    applyCutMaskWithDirection(sheetObj, cutData.p1, cutData.p2, cutData.flipped);
+}
+
+// Close modals on outside click
+document.querySelectorAll('.modal').forEach(modal => {
+    modal.addEventListener('click', function(e) {
+        if (e.target === this) {
+            this.style.display = 'none';
+        }
+    });
+});

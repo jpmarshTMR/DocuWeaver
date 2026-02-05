@@ -1,0 +1,107 @@
+{% extends 'base.html' %}
+
+{% block title %}Projects - PDF Alignment Tool{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h2>Projects</h2>
+            <button class="btn btn-success" onclick="showCreateModal()">+ New Project</button>
+        </div>
+
+        {% if projects %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Sheets</th>
+                    <th>Assets</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for project in projects %}
+                <tr>
+                    <td><strong>{{ project.name }}</strong></td>
+                    <td class="text-muted">{{ project.description|truncatechars:50 }}</td>
+                    <td><span class="badge badge-primary">{{ project.sheets.count }} sheets</span></td>
+                    <td><span class="badge badge-success">{{ project.assets.count }} assets</span></td>
+                    <td class="text-muted">{{ project.created_at|date:"M d, Y" }}</td>
+                    <td>
+                        <a href="{% url 'drawings:editor' project.pk %}" class="btn">Open Editor</a>
+                        <a href="{% url 'drawings:project_detail' project.pk %}" class="btn" style="background: #6c757d;">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted">No projects yet. Create one to get started!</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Create Project Modal -->
+<div id="createModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="background: white; max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
+        <h2 style="margin-bottom: 1rem;">Create New Project</h2>
+        <form id="createForm">
+            <div class="form-group">
+                <label>Project Name</label>
+                <input type="text" name="name" required>
+            </div>
+            <div class="form-group">
+                <label>Description (optional)</label>
+                <textarea name="description" rows="3"></textarea>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn" style="background: #6c757d;" onclick="hideCreateModal()">Cancel</button>
+                <button type="submit" class="btn btn-success">Create Project</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showCreateModal() {
+    document.getElementById('createModal').style.display = 'block';
+}
+
+function hideCreateModal() {
+    document.getElementById('createModal').style.display = 'none';
+}
+
+document.getElementById('createForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const data = {
+        name: formData.get('name'),
+        description: formData.get('description') || ''
+    };
+
+    const response = await fetch('/api/projects/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        window.location.reload();
+    } else {
+        alert('Error creating project');
+    }
+});
+
+// Close modal on outside click
+document.getElementById('createModal').addEventListener('click', (e) => {
+    if (e.target.id === 'createModal') {
+        hideCreateModal();
+    }
+});
+</script>
+{% endblock %}

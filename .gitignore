@@ -1,0 +1,45 @@
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Django
+*.sqlite3
+*.log
+local_settings.py
+
+# Media files (uploaded PDFs and rendered images)
+media/*.pdf
+media/rendered/
+media/exports/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+
+# pytest
+.pytest_cache/
