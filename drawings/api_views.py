@@ -11,7 +11,7 @@ from .serializers import (
     ProjectSerializer, ProjectListSerializer,
     SheetSerializer, AssetSerializer, AdjustmentLogSerializer
 )
-from .services.pdf_processor import render_pdf_page
+from .services.pdf_processor import render_pdf_page, get_pdf_page_count
 from .services.csv_importer import import_assets_from_csv
 from .services.export_service import export_sheet_with_overlays, generate_adjustment_report
 
@@ -36,10 +36,69 @@ class SheetListCreate(generics.ListCreateAPIView):
     def get_queryset(self):
         return Sheet.objects.filter(project_id=self.kwargs['project_pk'])
 
+    def create(self, request, *args, **kwargs):
+        """
+        Create sheet(s) from uploaded PDF.
+        If the PDF has multiple pages, creates a sheet for each page with sequential naming.
+        """
+        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
+        pdf_file = request.FILES.get('pdf_file')
+        base_name = request.data.get('name', 'Sheet')
+
+        if not pdf_file:
+            return Response({'error': 'No PDF file provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save the file temporarily to get page count
+        # First, create the initial sheet to save the file
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        first_sheet = serializer.save(project=project, page_number=1)
+
+        # Get the page count from the saved PDF
+        try:
+            page_count = get_pdf_page_count(first_sheet.pdf_file.path)
+        except Exception as e:
+            # If we can't read the PDF, just render the first page
+            render_pdf_page(first_sheet)
+            return Response(self.get_serializer(first_sheet).data, status=status.HTTP_201_CREATED)
+
+        created_sheets = []
+
+        if page_count == 1:
+            # Single page PDF - just render and return
+            render_pdf_page(first_sheet)
+            created_sheets.append(first_sheet)
+        else:
+            # Multi-page PDF - update first sheet name and create additional sheets
+            # Format: name-01, name-02, etc.
+            width = len(str(page_count))  # Determine padding width
+
+            # Update first sheet with sequential name
+            first_sheet.name = f"{base_name}-{str(1).zfill(width)}"
+            first_sheet.save()
+            render_pdf_page(first_sheet)
+            created_sheets.append(first_sheet)
+
+            # Create sheets for remaining pages
+            for page_num in range(2, page_count + 1):
+                sheet_name = f"{base_name}-{str(page_num).zfill(width)}"
+                sheet = Sheet.objects.create(
+                    project=project,
+                    name=sheet_name,
+                    pdf_file=first_sheet.pdf_file,  # Reuse the same PDF file
+                    page_number=page_num
+                )
+                render_pdf_page(sheet)
+                created_sheets.append(sheet)
+
+        # Return all created sheets
+        response_serializer = self.get_serializer(created_sheets, many=True)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
     def perform_create(self, serializer):
+        # This is kept for compatibility but create() now handles the logic
         project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
         sheet = serializer.save(project=project)
-        # Render the PDF page to an image
         render_pdf_page(sheet)
 
 

@@ -401,18 +401,18 @@
 <div id="uploadModal" class="modal">
     <div class="modal-content">
         <h2 style="margin-bottom: 1rem;">Upload PDF Sheet</h2>
+        <p class="text-muted" style="margin-bottom: 1rem; font-size: 0.9rem;">
+            Multi-page PDFs will automatically create separate sheets for each page,<br>
+            named sequentially (e.g., name-01, name-02, ...).
+        </p>
         <form id="uploadForm" enctype="multipart/form-data">
             <div class="form-group">
                 <label>Sheet Name</label>
-                <input type="text" name="name" required>
+                <input type="text" name="name" required placeholder="e.g., FloorPlan">
             </div>
             <div class="form-group">
                 <label>PDF File</label>
                 <input type="file" name="pdf_file" accept=".pdf" required>
-            </div>
-            <div class="form-group">
-                <label>Page Number</label>
-                <input type="number" name="page_number" value="1" min="1">
             </div>
             <div style="display: flex; gap: 1rem; justify-content: flex-end;">
                 <button type="button" class="btn" style="background: #6c757d;" onclick="hideUploadModal()">Cancel</button>

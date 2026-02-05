@@ -1291,8 +1291,19 @@ document.getElementById('uploadForm').addEventListener('submit', async function(
         });
 
         if (response.ok) {
+            const result = await response.json();
             hideUploadModal();
+
+            // Show message about how many sheets were created
+            if (Array.isArray(result)) {
+                const count = result.length;
+                if (count > 1) {
+                    alert(`PDF imported successfully! Created ${count} sheets (one per page).`);
+                }
+            }
+
             loadProjectData();
+            this.reset();  // Reset form for next upload
         } else {
             const error = await response.json();
             alert('Error: ' + JSON.stringify(error));

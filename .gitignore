@@ -13,6 +13,8 @@ env/
 *.sqlite3
 *.log
 local_settings.py
+*/migrations/*.py
+!*/migrations/__init__.py
 
 # Media files (uploaded PDFs and rendered images)
 media/*.pdf
