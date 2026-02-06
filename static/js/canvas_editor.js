@@ -628,6 +628,10 @@ function renderAssetList() {
 }
 
 function renderSheetsOnCanvas() {
+    // Count sheets with images to load
+    const sheetsToLoad = sheets.filter(s => s.rendered_image_url).length;
+    let sheetsLoaded = 0;
+
     sheets.forEach((sheet, index) => {
         if (sheet.rendered_image_url) {
             fabric.Image.fromURL(sheet.rendered_image_url, function(img) {
@@ -669,7 +673,6 @@ function renderSheetsOnCanvas() {
                 });
                 img.sheetData = sheet;
                 canvas.add(img);
-                canvas.sendToBack(img);
 
                 // Restore cut mask if sheet has saved cut data
                 if (sheet.crop_x !== 0 || sheet.crop_y !== 0 ||
@@ -683,10 +686,43 @@ function renderSheetsOnCanvas() {
                     applyCutMaskWithDirection(img, cutData.p1, cutData.p2, cutData.flipped);
                 }
 
+                sheetsLoaded++;
+
+                // Once all sheets are loaded, reorder by z_index
+                if (sheetsLoaded === sheetsToLoad) {
+                    reorderSheetsByZIndex();
+                }
+
                 canvas.renderAll();
             }, { crossOrigin: 'anonymous' });
         }
     });
+}
+
+/**
+ * Reorder sheet objects on canvas based on their z_index values.
+ * Lower z_index = further back (rendered first, behind others)
+ */
+function reorderSheetsByZIndex() {
+    // Get all sheet objects from canvas
+    const sheetObjects = canvas.getObjects().filter(obj => obj.sheetData);
+
+    if (sheetObjects.length === 0) return;
+
+    // Sort by z_index (ascending - lower values should be at back)
+    sheetObjects.sort((a, b) => a.sheetData.z_index - b.sheetData.z_index);
+
+    // Send each sheet to back in reverse order (highest z_index first)
+    // This way, the lowest z_index ends up at the very back
+    for (let i = sheetObjects.length - 1; i >= 0; i--) {
+        canvas.sendToBack(sheetObjects[i]);
+    }
+
+    canvas.renderAll();
+    console.log('Sheets reordered by z_index:', sheetObjects.map(o => ({
+        name: o.sheetData.name,
+        z_index: o.sheetData.z_index
+    })));
 }
 
 function renderAssetsOnCanvas() {
