@@ -34,6 +34,7 @@ let cropRect = null;
 let cropStart = null;
 let isCropping = false;
 let sheetCutData = {};  // Store cut data per sheet for flipping
+let cutStatsLabel = null;  // Fabric.Text showing angle/length while drawing
 
 // Viewport rotation state
 let viewportRotation = 0;  // Will be loaded from PROJECT_DATA
@@ -219,6 +220,12 @@ function initCanvas() {
         selection: false
     });
 
+    // Override getZoom: Fabric.js returns vpt[0] which is cos(angle)*zoom,
+    // collapsing to ~0 at 90° rotation. Return our tracked zoom instead.
+    canvas.getZoom = function() {
+        return currentZoomLevel;
+    };
+
     // Setup event handlers
     setupCanvasEvents();
     setupKeyboardShortcuts();
@@ -321,15 +328,14 @@ function setupCanvasEvents() {
         if (zoom < 0.1) zoom = 0.1;
         currentZoomLevel = zoom;
 
-        // Zoom to point while preserving rotation
+        // Zoom to cursor point while preserving rotation.
+        // Use full inverse matrix to convert screen -> canvas (handles rotation).
         const point = { x: opt.e.offsetX, y: opt.e.offsetY };
         const vpt = canvas.viewportTransform.slice();
+        const invMatrix = fabric.util.invertTransform(vpt);
+        const canvasPt = fabric.util.transformPoint(new fabric.Point(point.x, point.y), invMatrix);
 
-        // Calculate the point in canvas coordinates before zoom (use old zoom)
-        const beforeX = (point.x - vpt[4]) / oldZoom;
-        const beforeY = (point.y - vpt[5]) / oldZoom;
-
-        // Apply new zoom with rotation
+        // Build new viewport transform with updated zoom
         const angleRad = viewportRotation * Math.PI / 180;
         const cos = Math.cos(angleRad);
         const sin = Math.sin(angleRad);
@@ -339,9 +345,10 @@ function setupCanvasEvents() {
         vpt[2] = -sin * zoom;
         vpt[3] = cos * zoom;
 
-        // Adjust pan to keep the zoom point stationary
-        vpt[4] = point.x - beforeX * zoom;
-        vpt[5] = point.y - beforeY * zoom;
+        // Adjust pan so the canvas point under the cursor stays at the same screen position
+        const newScreenPt = fabric.util.transformPoint(canvasPt, vpt);
+        vpt[4] += point.x - newScreenPt.x;
+        vpt[5] += point.y - newScreenPt.y;
 
         canvas.setViewportTransform(vpt);
         opt.e.preventDefault();
@@ -513,6 +520,8 @@ function setMode(mode) {
             obj.selectable = isSelectMode;
             obj.evented = isSelectMode || isCropOrSplitMode;
             obj.hasControls = isSelectMode;  // Show rotation control only in select mode
+            // Override hover cursor so sheets show crosshair in cut/split mode
+            obj.hoverCursor = isCropOrSplitMode ? 'crosshair' : 'move';
         }
     });
     canvas.renderAll();
@@ -1639,6 +1648,42 @@ let targetSheetObj = null;
  * @param {Object} pointer - Canvas coordinates {x, y}
  * @returns {boolean} - True if point is in visible area
  */
+function updateCutStats(startPt, endPt) {
+    const dx = endPt.x - startPt.x;
+    const dy = endPt.y - startPt.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    const angleDeg = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
+
+    const label = `${angleDeg.toFixed(1)}°  ${Math.round(length)}px`;
+    const midX = (startPt.x + endPt.x) / 2;
+    const midY = (startPt.y + endPt.y) / 2;
+
+    if (!cutStatsLabel) {
+        cutStatsLabel = new fabric.Text(label, {
+            left: midX,
+            top: midY - 20,
+            fontSize: 13,
+            fill: '#ffffff',
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            fontFamily: 'monospace',
+            padding: 4,
+            selectable: false,
+            evented: false
+        });
+        canvas.add(cutStatsLabel);
+    } else {
+        cutStatsLabel.set({ text: label, left: midX, top: midY - 20 });
+    }
+    canvas.bringToFront(cutStatsLabel);
+}
+
+function removeCutStats() {
+    if (cutStatsLabel) {
+        canvas.remove(cutStatsLabel);
+        cutStatsLabel = null;
+    }
+}
+
 function isPointInVisibleArea(obj, pointer) {
     if (!obj.clipPath) return true;
 
@@ -1730,8 +1775,7 @@ function handleCropClick(opt) {
         // Draw the cut line
         cutLine = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
             stroke: '#ff0000',
-            strokeWidth: 2,
-            strokeDashArray: [10, 5],
+            strokeWidth: 1,
             strokeUniform: true,
             selectable: false,
             evented: false
@@ -1748,6 +1792,7 @@ function handleCropMove(opt) {
 
     const pointer = canvas.getPointer(opt.e);
     cutLine.set({ x2: pointer.x, y2: pointer.y });
+    updateCutStats(cutLineStart, pointer);
     canvas.renderAll();
 }
 
@@ -1779,6 +1824,7 @@ function handleCropEnd(opt) {
     cutLineStart = null;
     targetSheetObj = null;
     isCropping = false;
+    removeCutStats();
 }
 
 function applyCutMask(sheetObj, p1, p2) {
@@ -2111,8 +2157,7 @@ function handleSplitClick(opt) {
         // Draw the split line (different color from cut)
         splitLine = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
             stroke: '#00ff00',  // Green for split
-            strokeWidth: 2,
-            strokeDashArray: [10, 5],
+            strokeWidth: 1,
             strokeUniform: true,
             selectable: false,
             evented: false
@@ -2128,6 +2173,7 @@ function handleSplitMove(opt) {
 
     const pointer = canvas.getPointer(opt.e);
     splitLine.set({ x2: pointer.x, y2: pointer.y });
+    updateCutStats(splitLineStart, pointer);
     canvas.renderAll();
 }
 
@@ -2241,6 +2287,7 @@ async function handleSplitEnd(opt) {
     splitLineStart = null;
     splitTargetSheet = null;
     isSplitting = false;
+    removeCutStats();
 }
 
 // Close modals on outside click
