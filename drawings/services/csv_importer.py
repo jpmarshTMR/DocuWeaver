@@ -1,8 +1,11 @@
 """CSV import service for asset data."""
 import csv
 import io
+import logging
 from django.db import transaction
 from ..models import Asset, AssetType
+
+logger = logging.getLogger(__name__)
 
 
 def import_assets_from_csv(project, csv_file):
@@ -118,6 +121,11 @@ def import_assets_from_csv(project, csv_file):
 
             except Exception as e:
                 results['errors'].append(f"Row {row_num}: {str(e)}")
+
+    logger.info("CSV import for project %d: %d created, %d updated, %d errors",
+                project.pk, results['created'], results['updated'], len(results['errors']))
+    if results['errors']:
+        logger.warning("CSV import errors: %s", results['errors'][:5])  # Log first 5
 
     return results
 

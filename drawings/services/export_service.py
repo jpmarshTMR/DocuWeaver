@@ -1,11 +1,14 @@
 """Export service for generating PDFs with overlays and reports."""
 import os
 import csv
+import logging
 from io import StringIO
 from django.http import HttpResponse
 from django.conf import settings
 from django.utils.text import slugify
 from .pdf_processor import render_overlay_on_pdf
+
+logger = logging.getLogger(__name__)
 
 
 def sanitize_filename(name, max_length=100):
@@ -68,7 +71,9 @@ def export_sheet_with_overlays(sheet, assets):
     )
 
     # Return relative path from MEDIA_ROOT
-    return os.path.relpath(output_path, settings.MEDIA_ROOT)
+    rel_path = os.path.relpath(output_path, settings.MEDIA_ROOT)
+    logger.info("Exported sheet '%s' with %d overlays -> %s", sheet.name, len(overlays), rel_path)
+    return rel_path
 
 
 def generate_adjustment_report(project, adjusted_assets, logs, format_type='csv'):

@@ -41,12 +41,9 @@ class Sheet(models.Model):
     image_width = models.PositiveIntegerField(default=0)
     image_height = models.PositiveIntegerField(default=0)
 
-    # Crop region (for manual cutting)
-    crop_x = models.FloatField(default=0.0)
-    crop_y = models.FloatField(default=0.0)
-    crop_width = models.FloatField(default=0.0, help_text="0 means full width")
-    crop_height = models.FloatField(default=0.0, help_text="0 means full height")
-    crop_flipped = models.BooleanField(default=False, help_text="Which side of cut line to show")
+    # Cut lines (array of {p1: {x, y}, p2: {x, y}, flipped: bool})
+    cuts_json = models.JSONField(default=list, blank=True,
+        help_text="Array of cut definitions: [{p1: {x, y}, p2: {x, y}, flipped: bool}, ...]")
 
     # Position offset for alignment
     offset_x = models.FloatField(default=0.0, help_text="X offset in pixels")
@@ -61,6 +58,24 @@ class Sheet(models.Model):
 
     def __str__(self):
         return f"{self.name} (Page {self.page_number})"
+
+    def delete(self, *args, **kwargs):
+        pdf_path = self.pdf_file.name if self.pdf_file else None
+        rendered_path = self.rendered_image.name if self.rendered_image else None
+
+        # Check if other sheets share the same PDF file
+        other_pdf_users = 0
+        if pdf_path:
+            other_pdf_users = Sheet.objects.filter(pdf_file=pdf_path).exclude(pk=self.pk).count()
+
+        # Delete the DB record (without auto-deleting the file)
+        super().delete(*args, **kwargs)
+
+        # Only delete files if no other sheets reference them
+        if pdf_path and other_pdf_users == 0:
+            self.pdf_file.storage.delete(pdf_path)
+        if rendered_path:
+            self.rendered_image.storage.delete(rendered_path)
 
 
 class JoinMark(models.Model):

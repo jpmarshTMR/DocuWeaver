@@ -1,10 +1,13 @@
 """PDF processing service for rendering and manipulating PDFs."""
 import os
+import logging
 import fitz  # PyMuPDF
 from PIL import Image
 from io import BytesIO
 from django.core.files.base import ContentFile
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 def render_pdf_page(sheet, dpi=150):
@@ -49,6 +52,9 @@ def render_pdf_page(sheet, dpi=150):
 
     doc.close()
 
+    logger.info("Rendered sheet %d page %d at %d DPI (%dx%d px)",
+                sheet.id, sheet.page_number, dpi, pix.width, pix.height)
+
     return {
         'width': pix.width,
         'height': pix.height,
@@ -61,6 +67,7 @@ def get_pdf_page_count(pdf_path):
     doc = fitz.open(pdf_path)
     count = len(doc)
     doc.close()
+    logger.info("PDF %s has %d page(s)", os.path.basename(pdf_path), count)
     return count
 
 
@@ -172,6 +179,9 @@ def render_overlay_on_pdf(pdf_path, output_path, page_number, overlays, pixels_p
 
     doc.save(output_path)
     doc.close()
+
+    logger.info("Rendered %d overlay(s) on %s page %d -> %s",
+                len(overlays), os.path.basename(pdf_path), page_number, output_path)
 
     return output_path
 

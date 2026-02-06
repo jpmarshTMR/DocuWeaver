@@ -24,11 +24,25 @@ class SheetSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'project', 'name', 'pdf_file', 'page_number',
             'rendered_image', 'rendered_image_url', 'image_width', 'image_height',
-            'crop_x', 'crop_y', 'crop_width', 'crop_height', 'crop_flipped',
+            'cuts_json',
             'offset_x', 'offset_y', 'rotation', 'z_index',
             'join_marks', 'created_at'
         ]
         read_only_fields = ['project', 'rendered_image', 'image_width', 'image_height']
+
+    def validate_cuts_json(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("cuts_json must be a list")
+        for i, cut in enumerate(value):
+            if not isinstance(cut, dict):
+                raise serializers.ValidationError(f"cuts_json[{i}] must be an object")
+            for key in ('p1', 'p2'):
+                if key not in cut:
+                    raise serializers.ValidationError(f"cuts_json[{i}] missing '{key}'")
+                pt = cut[key]
+                if not isinstance(pt, dict) or 'x' not in pt or 'y' not in pt:
+                    raise serializers.ValidationError(f"cuts_json[{i}].{key} must have x and y")
+        return value
 
     def get_rendered_image_url(self, obj):
         if obj.rendered_image:

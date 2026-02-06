@@ -1,12 +1,17 @@
 """API views for drawings app."""
 import json
+import math
+import logging
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse, HttpResponse
+from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import Project, Sheet, Asset, AdjustmentLog, AssetType
+
+logger = logging.getLogger(__name__)
 from .serializers import (
     ProjectSerializer, ProjectListSerializer,
     SheetSerializer, AssetSerializer, AdjustmentLogSerializer
@@ -120,6 +125,7 @@ def render_sheet(request, pk):
             'height': sheet.image_height
         })
     except Exception as e:
+        logger.error("Failed to render sheet %d: %s", pk, e)
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
 
@@ -188,6 +194,7 @@ def import_csv(request, project_pk):
         result = import_assets_from_csv(project, csv_file)
         return Response(result)
     except Exception as e:
+        logger.error("CSV import failed for project %d: %s", project_pk, e)
         return Response({'error': str(e)}, status=400)
 
 
@@ -211,8 +218,10 @@ def export_project(request, project_pk):
                 'sheet_name': sheet.name,
                 'output_path': output_path
             })
+        logger.info("Exported %d sheet(s) for project %d", len(results), project_pk)
         return Response({'status': 'success', 'exports': results})
     except Exception as e:
+        logger.error("Export failed for project %d: %s", project_pk, e)
         return Response({'error': str(e)}, status=500)
 
 
@@ -250,6 +259,17 @@ def adjustment_report(request, project_pk):
     return Response(report)
 
 
+def _parse_finite_float(value, name):
+    """Parse a value as a finite float, raising ValueError with a descriptive message."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{name}' must be a valid number, got: {value!r}")
+    if not math.isfinite(result):
+        raise ValueError(f"'{name}' must be a finite number, got: {result}")
+    return result
+
+
 @api_view(['POST'])
 def calibrate_project(request, pk):
     """Set scale calibration for a project."""
@@ -259,22 +279,41 @@ def calibrate_project(request, pk):
     pixel_distance = request.data.get('pixel_distance')
     real_distance = request.data.get('real_distance')  # in meters
 
-    if pixel_distance and real_distance:
-        project.pixels_per_meter = float(pixel_distance) / float(real_distance)
+    if pixel_distance is not None and real_distance is not None:
+        try:
+            pixel_distance = _parse_finite_float(pixel_distance, 'pixel_distance')
+            real_distance = _parse_finite_float(real_distance, 'real_distance')
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+
+        if real_distance <= 0:
+            return Response({'error': 'real_distance must be greater than 0'}, status=400)
+        if pixel_distance <= 0:
+            return Response({'error': 'pixel_distance must be greater than 0'}, status=400)
+
+        project.pixels_per_meter = pixel_distance / real_distance
+        logger.info("Project %d calibrated: %.2f px/m (pixel_dist=%.2f, real_dist=%.2f)",
+                     project.pk, project.pixels_per_meter, pixel_distance, real_distance)
 
     # For origin setting
     origin_x = request.data.get('origin_x')
     origin_y = request.data.get('origin_y')
 
-    if origin_x is not None:
-        project.origin_x = float(origin_x)
-    if origin_y is not None:
-        project.origin_y = float(origin_y)
+    try:
+        if origin_x is not None:
+            project.origin_x = _parse_finite_float(origin_x, 'origin_x')
+        if origin_y is not None:
+            project.origin_y = _parse_finite_float(origin_y, 'origin_y')
+    except ValueError as e:
+        return Response({'error': str(e)}, status=400)
 
     # For viewport rotation
     canvas_rotation = request.data.get('canvas_rotation')
     if canvas_rotation is not None:
-        project.canvas_rotation = float(canvas_rotation)
+        try:
+            project.canvas_rotation = _parse_finite_float(canvas_rotation, 'canvas_rotation')
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
 
     project.save()
 
@@ -297,33 +336,45 @@ def split_sheet(request, pk):
     if not p1 or not p2:
         return Response({'error': 'p1 and p2 coordinates required'}, status=400)
 
-    # Create new sheet (copy of original)
-    new_sheet = Sheet.objects.create(
-        project=original.project,
-        name=f"{original.name}-split",
-        pdf_file=original.pdf_file,
-        page_number=original.page_number,
-        offset_x=original.offset_x,
-        offset_y=original.offset_y,
-        rotation=original.rotation,
-        z_index=original.z_index + 1,
-        # Store the cut line for the NEW sheet (will show opposite side)
-        crop_x=p1['x'],
-        crop_y=p1['y'],
-        crop_width=p2['x'],
-        crop_height=p2['y'],
-        crop_flipped=True,  # Show opposite side from original
-    )
+    # Validate p1 and p2 have numeric x,y keys
+    try:
+        p1_x = _parse_finite_float(p1.get('x'), 'p1.x')
+        p1_y = _parse_finite_float(p1.get('y'), 'p1.y')
+        p2_x = _parse_finite_float(p2.get('x'), 'p2.x')
+        p2_y = _parse_finite_float(p2.get('y'), 'p2.y')
+    except (ValueError, AttributeError) as e:
+        return Response({'error': f'Invalid coordinates: {e}'}, status=400)
 
-    # Render the new sheet's image
-    render_pdf_page(new_sheet)
+    cut_entry = {'p1': {'x': p1_x, 'y': p1_y}, 'p2': {'x': p2_x, 'y': p2_y}}
 
-    # Update original sheet's cut data (shows one side)
-    original.crop_x = p1['x']
-    original.crop_y = p1['y']
-    original.crop_width = p2['x']
-    original.crop_height = p2['y']
-    original.save()
+    try:
+        with transaction.atomic():
+            # Create new sheet (copy of original) with opposite cut
+            new_sheet = Sheet.objects.create(
+                project=original.project,
+                name=f"{original.name}-split",
+                pdf_file=original.pdf_file,
+                page_number=original.page_number,
+                offset_x=original.offset_x,
+                offset_y=original.offset_y,
+                rotation=original.rotation,
+                z_index=original.z_index + 1,
+                cuts_json=[{**cut_entry, 'flipped': True}],
+            )
+
+            # Render the new sheet's image
+            render_pdf_page(new_sheet)
+
+            # Append cut to original sheet's existing cuts
+            original_cuts = list(original.cuts_json or [])
+            original_cuts.append({**cut_entry, 'flipped': False})
+            original.cuts_json = original_cuts
+            original.save()
+
+        logger.info("Sheet %d split into %d and %d", original.pk, original.pk, new_sheet.pk)
+    except Exception as e:
+        logger.error("Failed to split sheet %d: %s", pk, e)
+        return Response({'error': f'Split failed: {e}'}, status=500)
 
     return Response({
         'original_id': original.id,

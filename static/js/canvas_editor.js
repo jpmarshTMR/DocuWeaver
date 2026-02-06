@@ -148,41 +148,21 @@ async function undoTransform(data) {
 async function undoCut(data) {
     const { sheetId, previousCutData } = data;
 
-    // Find sheet object on canvas
     const sheetObj = canvas.getObjects().find(obj =>
         obj.sheetData && obj.sheetData.id === sheetId
     );
 
     if (sheetObj) {
-        // If there was a previous cut, restore it; otherwise clear
-        if (previousCutData) {
+        if (previousCutData && previousCutData.length > 0) {
             sheetCutData[sheetId] = previousCutData;
-            applyCutMaskWithDirection(sheetObj, previousCutData.p1, previousCutData.p2, previousCutData.flipped);
+            applyAllCuts(sheetObj, previousCutData);
         } else {
-            // No previous cut - clear the clip path
             sheetObj.clipPath = null;
             delete sheetCutData[sheetId];
             canvas.renderAll();
         }
 
-        // Save to server
-        if (previousCutData) {
-            await saveCutData(sheetId, previousCutData);
-        } else {
-            await fetch(`/api/sheets/${sheetId}/`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': getCSRFToken()
-                },
-                body: JSON.stringify({
-                    crop_x: 0,
-                    crop_y: 0,
-                    crop_width: 0,
-                    crop_height: 0
-                })
-            });
-        }
+        await saveCutData(sheetId, previousCutData || []);
     }
 }
 
@@ -192,19 +172,15 @@ async function undoCut(data) {
 async function undoClearCut(data) {
     const { sheetId, cutData } = data;
 
-    if (!cutData) return;
+    if (!cutData || cutData.length === 0) return;
 
-    // Find sheet object on canvas
     const sheetObj = canvas.getObjects().find(obj =>
         obj.sheetData && obj.sheetData.id === sheetId
     );
 
     if (sheetObj) {
-        // Restore the cut
         sheetCutData[sheetId] = cutData;
-        applyCutMaskWithDirection(sheetObj, cutData.p1, cutData.p2, cutData.flipped);
-
-        // Save to server
+        applyAllCuts(sheetObj, cutData);
         await saveCutData(sheetId, cutData);
     }
 }
@@ -482,6 +458,15 @@ function setMode(mode) {
     console.log('setMode called with:', mode, '(previous mode:', currentMode + ')');
     currentMode = mode;
 
+    // Auto-deselect when entering crop or split mode
+    if (mode === 'crop' || mode === 'split') {
+        canvas.discardActiveObject();
+        selectedSheet = null;
+        selectedAsset = null;
+        document.querySelectorAll('.layer-item').forEach(item => item.classList.remove('selected'));
+        canvas.renderAll();
+    }
+
     // Update button states
     document.querySelectorAll('.tool-btn[data-mode]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -674,16 +659,10 @@ function renderSheetsOnCanvas() {
                 img.sheetData = sheet;
                 canvas.add(img);
 
-                // Restore cut mask if sheet has saved cut data
-                if (sheet.crop_x !== 0 || sheet.crop_y !== 0 ||
-                    sheet.crop_width !== 0 || sheet.crop_height !== 0) {
-                    const cutData = {
-                        p1: { x: sheet.crop_x, y: sheet.crop_y },
-                        p2: { x: sheet.crop_width, y: sheet.crop_height },
-                        flipped: sheet.crop_flipped || false  // Use saved flipped state
-                    };
-                    sheetCutData[sheet.id] = cutData;
-                    applyCutMaskWithDirection(img, cutData.p1, cutData.p2, cutData.flipped);
+                // Restore cut masks if sheet has saved cut data
+                if (sheet.cuts_json && sheet.cuts_json.length > 0) {
+                    sheetCutData[sheet.id] = sheet.cuts_json;
+                    applyAllCuts(img, sheet.cuts_json);
                 }
 
                 sheetsLoaded++;
@@ -1737,8 +1716,9 @@ function handleCropClick(opt) {
         // Draw the cut line
         cutLine = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
             stroke: '#ff0000',
-            strokeWidth: 3,
+            strokeWidth: 2,
             strokeDashArray: [10, 5],
+            strokeUniform: true,
             selectable: false,
             evented: false
         });
@@ -1790,133 +1770,198 @@ function handleCropEnd(opt) {
 function applyCutMask(sheetObj, p1, p2) {
     const sheetId = sheetObj.sheetData.id;
 
-    // Save undo state - capture previous cut data (if any)
-    const previousCutData = sheetCutData[sheetId] ? JSON.parse(JSON.stringify(sheetCutData[sheetId])) : null;
+    // Save undo state - capture the entire previous cuts array
+    const previousCuts = sheetCutData[sheetId]
+        ? JSON.parse(JSON.stringify(sheetCutData[sheetId]))
+        : null;
     saveUndoState('cut', {
         sheetId: sheetId,
-        previousCutData: previousCutData
+        previousCutData: previousCuts
     });
 
-    // Store cut data for flipping later
-    const cutData = {
+    // Append new cut to existing array
+    const newCut = {
         p1: { x: p1.x, y: p1.y },
         p2: { x: p2.x, y: p2.y },
         flipped: false
     };
-    sheetCutData[sheetId] = cutData;
 
-    applyCutMaskWithDirection(sheetObj, p1, p2, false);
-    saveCutData(sheetId, cutData);
-    console.log('Cut applied to sheet:', sheetObj.sheetData.name);
+    if (!sheetCutData[sheetId]) {
+        sheetCutData[sheetId] = [];
+    }
+    sheetCutData[sheetId].push(newCut);
+
+    // Apply all cuts
+    applyAllCuts(sheetObj, sheetCutData[sheetId]);
+    saveCutData(sheetId, sheetCutData[sheetId]);
+    console.log('Cut added to sheet:', sheetObj.sheetData.name,
+                'Total cuts:', sheetCutData[sheetId].length);
 }
 
-function applyCutMaskWithDirection(sheetObj, p1, p2, flipped) {
-    // Get the sheet's dimensions in local coordinates
+/**
+ * Sutherland-Hodgman polygon clipping: clips polygon against one half-plane.
+ * Points on the LEFT side of edgeP1->edgeP2 are kept.
+ */
+function clipPolygonByEdge(subjectPolygon, edgeP1, edgeP2) {
+    if (subjectPolygon.length === 0) return [];
+
+    const output = [];
+    const edgeDx = edgeP2.x - edgeP1.x;
+    const edgeDy = edgeP2.y - edgeP1.y;
+
+    function cross(point) {
+        return edgeDx * (point.y - edgeP1.y) - edgeDy * (point.x - edgeP1.x);
+    }
+
+    function intersection(a, b) {
+        const ca = cross(a);
+        const cb = cross(b);
+        const t = ca / (ca - cb);
+        return {
+            x: a.x + t * (b.x - a.x),
+            y: a.y + t * (b.y - a.y)
+        };
+    }
+
+    for (let i = 0; i < subjectPolygon.length; i++) {
+        const current = subjectPolygon[i];
+        const next = subjectPolygon[(i + 1) % subjectPolygon.length];
+        const currentInside = cross(current) >= 0;
+        const nextInside = cross(next) >= 0;
+
+        if (currentInside) {
+            output.push(current);
+            if (!nextInside) {
+                output.push(intersection(current, next));
+            }
+        } else if (nextInside) {
+            output.push(intersection(current, next));
+        }
+    }
+
+    return output;
+}
+
+/**
+ * Compute the intersection of multiple half-plane cuts into a single polygon.
+ * Returns array of {x, y} in local coordinates, or null if everything is clipped away.
+ */
+function computeMultiCutPolygon(sheetObj, cuts) {
     const imgWidth = sheetObj.width;
     const imgHeight = sheetObj.height;
+    const padding = Math.max(imgWidth, imgHeight) * 0.6;
 
-    // Convert canvas coordinates to object-local coordinates
-    // Must use Fabric.js transform matrix for proper handling of rotation/scale
+    // Start with a rectangle covering the full image in local coords (origin at center)
+    let polygon = [
+        { x: -imgWidth / 2 - padding, y: -imgHeight / 2 - padding },
+        { x:  imgWidth / 2 + padding, y: -imgHeight / 2 - padding },
+        { x:  imgWidth / 2 + padding, y:  imgHeight / 2 + padding },
+        { x: -imgWidth / 2 - padding, y:  imgHeight / 2 + padding }
+    ];
+
     const toLocal = (canvasX, canvasY) => {
         const point = new fabric.Point(canvasX, canvasY);
-        // Get the inverse of the object's transform matrix
         const invertedMatrix = fabric.util.invertTransform(sheetObj.calcTransformMatrix());
-        // Transform the point from canvas space to object space
         const transformed = fabric.util.transformPoint(point, invertedMatrix);
         return { x: transformed.x, y: transformed.y };
     };
 
-    const localP1 = toLocal(p1.x, p1.y);
-    const localP2 = toLocal(p2.x, p2.y);
+    for (const cut of cuts) {
+        const localP1 = toLocal(cut.p1.x, cut.p1.y);
+        const localP2 = toLocal(cut.p2.x, cut.p2.y);
 
-    // Calculate the line direction and perpendicular
-    const dx = localP2.x - localP1.x;
-    const dy = localP2.y - localP1.y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return;
+        const dx = localP2.x - localP1.x;
+        const dy = localP2.y - localP1.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len === 0) continue;
 
-    // Normalize
-    const nx = dx / len;
-    const ny = dy / len;
+        // Perpendicular (90 CCW = left side of direction)
+        let px = -dy / len;
+        let py =  dx / len;
 
-    // Calculate perpendicular (initially use right-hand rule: 90 degrees CCW)
-    let px = -ny;
-    let py = nx;
+        // Point perpendicular toward sheet center (0,0 in local coords)
+        const midX = (localP1.x + localP2.x) / 2;
+        const midY = (localP1.y + localP2.y) / 2;
+        const dotProduct = (0 - midX) * px + (0 - midY) * py;
+        if (dotProduct < 0) {
+            px = -px;
+            py = -py;
+        }
 
-    // Determine which side of the line the sheet center is on
-    // Sheet center in local coordinates is at (imgWidth/2, imgHeight/2) relative to the image origin
-    // But for Fabric.js images with default origin, the local (0,0) is at the image center
-    // So we need to check which side of the line the origin (0,0) is on
-    const sheetCenterX = 0;  // Local center of Fabric.js image
-    const sheetCenterY = 0;
+        // Apply user flip
+        if (cut.flipped) {
+            px = -px;
+            py = -py;
+        }
 
-    // Calculate midpoint of the cut line
-    const midX = (localP1.x + localP2.x) / 2;
-    const midY = (localP1.y + localP2.y) / 2;
+        // Orient edge so "keep" side is on the LEFT of edgeP1->edgeP2
+        const leftPx = -dy / len;
+        const leftPy =  dx / len;
+        const isLeftSide = (px * leftPx + py * leftPy) > 0;
 
-    // Vector from line midpoint to sheet center
-    const toSheetCenterX = sheetCenterX - midX;
-    const toSheetCenterY = sheetCenterY - midY;
+        let edgeP1, edgeP2;
+        if (isLeftSide) {
+            edgeP1 = localP1;
+            edgeP2 = localP2;
+        } else {
+            edgeP1 = localP2;
+            edgeP2 = localP1;
+        }
 
-    // Dot product with perpendicular tells us which side the center is on
-    const dotProduct = toSheetCenterX * px + toSheetCenterY * py;
-
-    // If dot product is negative, the center is on the opposite side of perpendicular
-    // So flip the perpendicular to point toward the center
-    if (dotProduct < 0) {
-        px = -px;
-        py = -py;
+        polygon = clipPolygonByEdge(polygon, edgeP1, edgeP2);
+        if (polygon.length === 0) return null;
     }
 
-    // Now apply the user's flip preference
-    if (flipped) {
-        px = -px;
-        py = -py;
+    // Round to integers for pixel-perfect edges
+    return polygon.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+}
+
+/**
+ * Apply all cuts for a sheet, computing the composite clip polygon.
+ */
+function applyAllCuts(sheetObj, cuts) {
+    if (!cuts || cuts.length === 0) {
+        sheetObj.clipPath = null;
+        sheetObj.objectCaching = true;
+        sheetObj.dirty = true;
+        canvas.renderAll();
+        return;
     }
 
-    console.log('Cut direction - perpendicular:', {px, py}, 'dotProduct:', dotProduct, 'flipped:', flipped);
+    const polygon = computeMultiCutPolygon(sheetObj, cuts);
 
-    // Use image dimensions for padding to ensure full coverage
-    // Image dimensions in local space
-    const padding = Math.max(imgWidth, imgHeight) * 1.5;
+    if (!polygon || polygon.length < 3) {
+        console.warn('All cuts clip away the entire sheet');
+        sheetObj.clipPath = null;
+        sheetObj.dirty = true;
+        canvas.renderAll();
+        return;
+    }
 
-    // Line endpoints extended
-    const l1x = localP1.x - nx * padding;
-    const l1y = localP1.y - ny * padding;
-    const l2x = localP2.x + nx * padding;
-    const l2y = localP2.y + ny * padding;
-
-    // Points on the "keep" side (extends perpendicular to the line)
-    const k1x = l1x + px * padding;
-    const k1y = l1y + py * padding;
-    const k2x = l2x + px * padding;
-    const k2y = l2y + py * padding;
-
-    const clipPoints = [
-        { x: l1x, y: l1y },
-        { x: l2x, y: l2y },
-        { x: k2x, y: k2y },
-        { x: k1x, y: k1y }
-    ];
-
-    // Create clip path polygon - use object-relative coordinates
-    const clipPath = new fabric.Polygon(clipPoints, {
+    const clipPath = new fabric.Polygon(polygon, {
         originX: 'left',
         originY: 'top',
-        absolutePositioned: false
+        absolutePositioned: false,
+        objectCaching: false
     });
 
     sheetObj.clipPath = clipPath;
-    // Ensure clip path bounds are calculated
+    sheetObj.objectCaching = false;
     if (sheetObj.clipPath.setCoords) {
         sheetObj.clipPath.setCoords();
     }
     sheetObj.dirty = true;
     canvas.renderAll();
-    console.log('Clip applied with points:', clipPoints);
 }
 
-async function saveCutData(sheetId, cutData) {
+/**
+ * Backward-compatible wrapper for single-cut callers.
+ */
+function applyCutMaskWithDirection(sheetObj, p1, p2, flipped) {
+    applyAllCuts(sheetObj, [{ p1, p2, flipped }]);
+}
+
+async function saveCutData(sheetId, cuts) {
     try {
         const response = await fetch(`/api/sheets/${sheetId}/`, {
             method: 'PATCH',
@@ -1925,15 +1970,11 @@ async function saveCutData(sheetId, cutData) {
                 'X-CSRFToken': getCSRFToken()
             },
             body: JSON.stringify({
-                crop_x: cutData.p1.x,
-                crop_y: cutData.p1.y,
-                crop_width: cutData.p2.x,
-                crop_height: cutData.p2.y,
-                crop_flipped: cutData.flipped || false
+                cuts_json: cuts
             })
         });
         if (response.ok) {
-            console.log('Cut data saved (flipped:', cutData.flipped, ')');
+            console.log('Cut data saved, count:', cuts.length);
         }
     } catch (error) {
         console.error('Error saving cut data:', error);
@@ -1956,33 +1997,21 @@ function clearSelectedSheetCut() {
         return;
     }
 
-    // Save undo state before clearing - capture current cut data
-    const existingCutData = sheetCutData[selectedSheet.id];
-    if (existingCutData) {
+    // Save undo state before clearing - capture current cuts array
+    const existingCuts = sheetCutData[selectedSheet.id];
+    if (existingCuts && existingCuts.length > 0) {
         saveUndoState('clearCut', {
             sheetId: selectedSheet.id,
-            cutData: JSON.parse(JSON.stringify(existingCutData))
+            cutData: JSON.parse(JSON.stringify(existingCuts))
         });
     }
 
     clearSheetCut(selectedSheet.id);
     delete sheetCutData[selectedSheet.id];
 
-    // Clear saved cut data
-    fetch(`/api/sheets/${selectedSheet.id}/`, {
-        method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
-        body: JSON.stringify({
-            crop_x: 0,
-            crop_y: 0,
-            crop_width: 0,
-            crop_height: 0
-        })
-    });
-    console.log('Cut cleared from sheet:', selectedSheet.name);
+    // Save empty cuts to server
+    saveCutData(selectedSheet.id, []);
+    console.log('All cuts cleared from sheet:', selectedSheet.name);
 }
 
 function flipSelectedSheetCut() {
@@ -1991,31 +2020,24 @@ function flipSelectedSheetCut() {
         return;
     }
 
-    const cutData = sheetCutData[selectedSheet.id];
-    if (!cutData) {
+    const cuts = sheetCutData[selectedSheet.id];
+    if (!cuts || cuts.length === 0) {
         console.log('No cut data to flip');
         return;
     }
 
-    // Find the sheet object
-    let sheetObj = null;
-    canvas.getObjects().forEach(obj => {
-        if (obj.sheetData && obj.sheetData.id === selectedSheet.id) {
-            sheetObj = obj;
-        }
-    });
-
+    const sheetObj = canvas.getObjects().find(obj =>
+        obj.sheetData && obj.sheetData.id === selectedSheet.id
+    );
     if (!sheetObj) return;
 
-    // Flip the cut direction
-    cutData.flipped = !cutData.flipped;
-    sheetCutData[selectedSheet.id] = cutData;
+    // Flip the last (most recently added) cut
+    const lastCut = cuts[cuts.length - 1];
+    lastCut.flipped = !lastCut.flipped;
 
-    // Reapply with flipped direction
-    applyCutMaskWithDirection(sheetObj, cutData.p1, cutData.p2, cutData.flipped);
-
-    // Save the flipped state to server
-    saveCutData(selectedSheet.id, cutData);
+    // Reapply all cuts
+    applyAllCuts(sheetObj, cuts);
+    saveCutData(selectedSheet.id, cuts);
 }
 
 // Split Sheet Tool - splits a sheet into two independent pieces
@@ -2071,8 +2093,9 @@ function handleSplitClick(opt) {
         // Draw the split line (different color from cut)
         splitLine = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
             stroke: '#00ff00',  // Green for split
-            strokeWidth: 3,
+            strokeWidth: 2,
             strokeDashArray: [10, 5],
+            strokeUniform: true,
             selectable: false,
             evented: false
         });
@@ -2119,14 +2142,17 @@ async function handleSplitEnd(opt) {
                 const result = await response.json();
                 console.log('Sheet split successfully:', result);
 
-                // Apply cut mask to original sheet (one side)
-                const cutData = {
-                    p1: splitLineStart,
-                    p2: pointer,
+                // Append cut to original sheet's existing cuts
+                const originalId = splitTargetSheet.sheetData.id;
+                if (!sheetCutData[originalId]) {
+                    sheetCutData[originalId] = [];
+                }
+                sheetCutData[originalId].push({
+                    p1: { x: splitLineStart.x, y: splitLineStart.y },
+                    p2: { x: pointer.x, y: pointer.y },
                     flipped: false
-                };
-                sheetCutData[splitTargetSheet.sheetData.id] = cutData;
-                applyCutMaskWithDirection(splitTargetSheet, splitLineStart, pointer, false);
+                });
+                applyAllCuts(splitTargetSheet, sheetCutData[originalId]);
 
                 // Add new sheet to canvas with opposite cut
                 const newSheet = result.new_sheet;
@@ -2164,14 +2190,12 @@ async function handleSplitEnd(opt) {
                         img.sheetData = newSheet;
                         canvas.add(img);
 
-                        // Apply opposite cut to new sheet
-                        const newCutData = {
-                            p1: { x: newSheet.crop_x, y: newSheet.crop_y },
-                            p2: { x: newSheet.crop_width, y: newSheet.crop_height },
-                            flipped: true  // Opposite side
-                        };
-                        sheetCutData[newSheet.id] = newCutData;
-                        applyCutMaskWithDirection(img, newCutData.p1, newCutData.p2, newCutData.flipped);
+                        // Apply opposite cut to new sheet from server response
+                        const newCuts = newSheet.cuts_json || [];
+                        if (newCuts.length > 0) {
+                            sheetCutData[newSheet.id] = newCuts;
+                            applyAllCuts(img, newCuts);
+                        }
 
                         canvas.renderAll();
                     }, { crossOrigin: 'anonymous' });
