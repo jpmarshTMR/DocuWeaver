@@ -16,6 +16,9 @@ class Project(models.Model):
     origin_x = models.FloatField(default=0.0, help_text="X coordinate of origin in pixels")
     origin_y = models.FloatField(default=0.0, help_text="Y coordinate of origin in pixels")
 
+    # Viewport rotation (for aligning drawings with different orientations)
+    canvas_rotation = models.FloatField(default=0.0, help_text="Viewport rotation in degrees")
+
     class Meta:
         ordering = ['-created_at']
 

@@ -271,10 +271,60 @@ def calibrate_project(request, pk):
     if origin_y is not None:
         project.origin_y = float(origin_y)
 
+    # For viewport rotation
+    canvas_rotation = request.data.get('canvas_rotation')
+    if canvas_rotation is not None:
+        project.canvas_rotation = float(canvas_rotation)
+
     project.save()
 
     return Response({
         'pixels_per_meter': project.pixels_per_meter,
         'origin_x': project.origin_x,
-        'origin_y': project.origin_y
+        'origin_y': project.origin_y,
+        'canvas_rotation': project.canvas_rotation
+    })
+
+
+@api_view(['POST'])
+def split_sheet(request, pk):
+    """Split a sheet into two independent pieces along a line."""
+    original = get_object_or_404(Sheet, pk=pk)
+
+    p1 = request.data.get('p1')  # {x, y}
+    p2 = request.data.get('p2')  # {x, y}
+
+    if not p1 or not p2:
+        return Response({'error': 'p1 and p2 coordinates required'}, status=400)
+
+    # Create new sheet (copy of original)
+    new_sheet = Sheet.objects.create(
+        project=original.project,
+        name=f"{original.name}-split",
+        pdf_file=original.pdf_file,
+        page_number=original.page_number,
+        offset_x=original.offset_x,
+        offset_y=original.offset_y,
+        rotation=original.rotation,
+        z_index=original.z_index + 1,
+        # Store the cut line for the NEW sheet (will show opposite side)
+        crop_x=p1['x'],
+        crop_y=p1['y'],
+        crop_width=p2['x'],
+        crop_height=p2['y'],
+    )
+
+    # Render the new sheet's image
+    render_pdf_page(new_sheet)
+
+    # Update original sheet's cut data (shows one side)
+    original.crop_x = p1['x']
+    original.crop_y = p1['y']
+    original.crop_width = p2['x']
+    original.crop_height = p2['y']
+    original.save()
+
+    return Response({
+        'original_id': original.id,
+        'new_sheet': SheetSerializer(new_sheet, context={'request': request}).data
     })

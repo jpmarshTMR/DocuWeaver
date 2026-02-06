@@ -35,6 +35,9 @@ let cropStart = null;
 let isCropping = false;
 let sheetCutData = {};  // Store cut data per sheet for flipping
 
+// Viewport rotation state
+let viewportRotation = 0;  // Will be loaded from PROJECT_DATA
+
 // Undo system
 const undoStack = [];
 const MAX_UNDO_STEPS = 50;
@@ -210,6 +213,16 @@ async function undoClearCut(data) {
 document.addEventListener('DOMContentLoaded', function() {
     initCanvas();
     loadProjectData();
+
+    // Initialize viewport rotation from project data
+    if (PROJECT_DATA.canvas_rotation) {
+        viewportRotation = PROJECT_DATA.canvas_rotation;
+        // Apply rotation after canvas is ready
+        setTimeout(() => {
+            applyViewportRotation();
+            updateRotationDisplay();
+        }, 100);
+    }
 });
 
 function initCanvas() {
@@ -276,6 +289,8 @@ function setupCanvasEvents() {
             handleSelectClick(opt);
         } else if (currentMode === 'crop') {
             handleCropClick(opt);
+        } else if (currentMode === 'split') {
+            handleSplitClick(opt);
         }
     });
 
@@ -296,6 +311,11 @@ function setupCanvasEvents() {
         if (currentMode === 'crop') {
             handleCropMove(opt);
         }
+
+        // Handle split drag (same visual as crop)
+        if (currentMode === 'split') {
+            handleSplitMove(opt);
+        }
     });
 
     canvas.on('mouse:up', function(opt) {
@@ -308,6 +328,11 @@ function setupCanvasEvents() {
         if (currentMode === 'crop' && isCropping) {
             handleCropEnd(opt);
         }
+
+        // Handle split end
+        if (currentMode === 'split' && isSplitting) {
+            handleSplitEnd(opt);
+        }
     });
 
     canvas.on('mouse:wheel', function(opt) {
@@ -317,7 +342,29 @@ function setupCanvasEvents() {
         if (zoom > 5) zoom = 5;
         if (zoom < 0.1) zoom = 0.1;
 
-        canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+        // Zoom to point while preserving rotation
+        const point = { x: opt.e.offsetX, y: opt.e.offsetY };
+        const vpt = canvas.viewportTransform.slice();
+
+        // Calculate the point in canvas coordinates before zoom
+        const beforeX = (point.x - vpt[4]) / canvas.getZoom();
+        const beforeY = (point.y - vpt[5]) / canvas.getZoom();
+
+        // Apply new zoom with rotation
+        const angleRad = viewportRotation * Math.PI / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+
+        vpt[0] = cos * zoom;
+        vpt[1] = sin * zoom;
+        vpt[2] = -sin * zoom;
+        vpt[3] = cos * zoom;
+
+        // Adjust pan to keep the zoom point stationary
+        vpt[4] = point.x - beforeX * zoom;
+        vpt[5] = point.y - beforeY * zoom;
+
+        canvas.setViewportTransform(vpt);
         opt.e.preventDefault();
         opt.e.stopPropagation();
 
@@ -456,6 +503,10 @@ function setMode(mode) {
             canvas.defaultCursor = 'crosshair';
             canvas.selection = false;  // Prevent box selection
             break;
+        case 'split':
+            canvas.defaultCursor = 'crosshair';
+            canvas.selection = false;  // Prevent box selection
+            break;
         case 'calibrate':
             canvas.defaultCursor = 'crosshair';
             calibrationPoints = [];
@@ -467,12 +518,12 @@ function setMode(mode) {
 
     // Update selectability of all sheet objects
     // Sheets are selectable only in select mode
-    // Sheets must be evented in crop mode to detect clicks for cut lines
-    const isCropMode = (mode === 'crop');
+    // Sheets must be evented in crop/split mode to detect clicks for cut lines
+    const isCropOrSplitMode = (mode === 'crop' || mode === 'split');
     canvas.getObjects().forEach(obj => {
         if (obj.sheetData) {
             obj.selectable = isSelectMode;
-            obj.evented = isSelectMode || isCropMode;
+            obj.evented = isSelectMode || isCropOrSplitMode;
             obj.hasControls = isSelectMode;  // Show rotation control only in select mode
         }
     });
@@ -619,6 +670,19 @@ function renderSheetsOnCanvas() {
                 img.sheetData = sheet;
                 canvas.add(img);
                 canvas.sendToBack(img);
+
+                // Restore cut mask if sheet has saved cut data
+                if (sheet.crop_x !== 0 || sheet.crop_y !== 0 ||
+                    sheet.crop_width !== 0 || sheet.crop_height !== 0) {
+                    const cutData = {
+                        p1: { x: sheet.crop_x, y: sheet.crop_y },
+                        p2: { x: sheet.crop_width, y: sheet.crop_height },
+                        flipped: false
+                    };
+                    sheetCutData[sheet.id] = cutData;
+                    applyCutMaskWithDirection(img, cutData.p1, cutData.p2, cutData.flipped);
+                }
+
                 canvas.renderAll();
             }, { crossOrigin: 'anonymous' });
         }
@@ -842,6 +906,59 @@ function clearSelection() {
     document.getElementById('no-selection').style.display = 'block';
     document.getElementById('sheet-properties').style.display = 'none';
     document.getElementById('asset-properties').style.display = 'none';
+}
+
+// Delete selected sheet
+async function deleteSelectedSheet() {
+    if (!selectedSheet) {
+        console.log('No sheet selected for deletion');
+        return;
+    }
+
+    const sheetName = selectedSheet.name;
+    const confirmed = confirm(`Are you sure you want to delete "${sheetName}"? This cannot be undone.`);
+
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch(`/api/sheets/${selectedSheet.id}/`, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+
+        if (response.ok || response.status === 204) {
+            // Remove from canvas
+            canvas.getObjects().forEach(obj => {
+                if (obj.sheetData && obj.sheetData.id === selectedSheet.id) {
+                    canvas.remove(obj);
+                }
+            });
+            canvas.renderAll();
+
+            // Remove from local data
+            const index = sheets.findIndex(s => s.id === selectedSheet.id);
+            if (index >= 0) {
+                sheets.splice(index, 1);
+            }
+
+            // Clear cut data for this sheet
+            delete sheetCutData[selectedSheet.id];
+
+            // Clear selection and refresh UI
+            clearSelection();
+            renderSheetLayers();
+
+            console.log('Sheet deleted:', sheetName);
+        } else {
+            const error = await response.json();
+            alert('Error deleting sheet: ' + JSON.stringify(error));
+        }
+    } catch (error) {
+        console.error('Error deleting sheet:', error);
+        alert('Error deleting sheet');
+    }
 }
 
 // Calibration
@@ -1185,15 +1302,36 @@ function toggleSheetVisibility(sheetId, visible) {
 function zoomIn() {
     let zoom = canvas.getZoom() * 1.2;
     if (zoom > 5) zoom = 5;
-    canvas.setZoom(zoom);
+    setZoomPreservingRotation(zoom);
     updateZoomDisplay();
 }
 
 function zoomOut() {
     let zoom = canvas.getZoom() / 1.2;
     if (zoom < 0.1) zoom = 0.1;
-    canvas.setZoom(zoom);
+    setZoomPreservingRotation(zoom);
     updateZoomDisplay();
+}
+
+/**
+ * Set zoom while preserving the current viewport rotation
+ * @param {number} zoom - New zoom level
+ */
+function setZoomPreservingRotation(zoom) {
+    const angleRad = viewportRotation * Math.PI / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    const vpt = canvas.viewportTransform;
+
+    // Apply zoom with rotation
+    vpt[0] = cos * zoom;
+    vpt[1] = sin * zoom;
+    vpt[2] = -sin * zoom;
+    vpt[3] = cos * zoom;
+    // Keep pan values unchanged
+
+    canvas.setViewportTransform(vpt);
 }
 
 function zoomFit() {
@@ -1227,8 +1365,9 @@ function zoomFit() {
 }
 
 function resetView() {
-    canvas.setZoom(1);
+    setZoomPreservingRotation(1);
     canvas.absolutePan({ x: 0, y: 0 });
+    applyViewportRotation();  // Re-apply rotation after pan
     updateZoomDisplay();
 }
 
@@ -1236,6 +1375,100 @@ function updateZoomDisplay() {
     const zoom = Math.round(canvas.getZoom() * 100);
     document.getElementById('zoom-level').textContent = zoom;
     document.getElementById('zoom-display').textContent = zoom + '%';
+}
+
+// Viewport Rotation Functions
+let rotationSaveTimeout = null;
+
+/**
+ * Set the viewport rotation to a specific angle
+ * @param {number} degrees - Rotation angle in degrees
+ */
+function setViewportRotation(degrees) {
+    viewportRotation = ((degrees % 360) + 360) % 360;  // Normalize to 0-360
+    applyViewportRotation();
+    updateRotationDisplay();
+    debouncedSaveRotation();
+}
+
+/**
+ * Rotate the viewport by a delta amount
+ * @param {number} delta - Degrees to rotate by (positive = clockwise)
+ */
+function rotateViewportBy(delta) {
+    setViewportRotation(viewportRotation + delta);
+}
+
+/**
+ * Apply the current viewport rotation to the canvas
+ */
+function applyViewportRotation() {
+    const angleRad = viewportRotation * Math.PI / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    const vpt = canvas.viewportTransform;
+    const currentZoom = canvas.getZoom();
+
+    // Get current pan position
+    const panX = vpt[4];
+    const panY = vpt[5];
+
+    // Apply rotation with current zoom
+    // Matrix: [scaleX*cos, scaleY*sin, -scaleX*sin, scaleY*cos, panX, panY]
+    vpt[0] = cos * currentZoom;
+    vpt[1] = sin * currentZoom;
+    vpt[2] = -sin * currentZoom;
+    vpt[3] = cos * currentZoom;
+    // Keep pan values
+    vpt[4] = panX;
+    vpt[5] = panY;
+
+    canvas.setViewportTransform(vpt);
+    canvas.requestRenderAll();
+}
+
+/**
+ * Update the rotation display in the UI
+ */
+function updateRotationDisplay() {
+    const displayAngle = Math.round(viewportRotation);
+    document.getElementById('rotation-level').textContent = displayAngle;
+    const rotationInput = document.getElementById('viewport-rotation');
+    if (rotationInput) {
+        rotationInput.value = displayAngle;
+    }
+}
+
+/**
+ * Save viewport rotation to server (debounced)
+ */
+function debouncedSaveRotation() {
+    if (rotationSaveTimeout) {
+        clearTimeout(rotationSaveTimeout);
+    }
+    rotationSaveTimeout = setTimeout(saveViewportRotation, 500);
+}
+
+async function saveViewportRotation() {
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/calibrate/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ canvas_rotation: viewportRotation })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            PROJECT_DATA.canvas_rotation = result.canvas_rotation;
+            console.log('Viewport rotation saved:', viewportRotation);
+        }
+    } catch (error) {
+        console.error('Error saving viewport rotation:', error);
+    }
 }
 
 function updateCursorPosition(opt) {
@@ -1371,6 +1604,24 @@ let cutLine = null;
 let cutLineStart = null;
 let targetSheetObj = null;
 
+/**
+ * Check if a point is in the visible (non-clipped) area of an object
+ * @param {fabric.Object} obj - The object with clipPath
+ * @param {Object} pointer - Canvas coordinates {x, y}
+ * @returns {boolean} - True if point is in visible area
+ */
+function isPointInVisibleArea(obj, pointer) {
+    if (!obj.clipPath) return true;
+
+    // Convert pointer to object-local coordinates
+    const point = new fabric.Point(pointer.x, pointer.y);
+    const invertedMatrix = fabric.util.invertTransform(obj.calcTransformMatrix());
+    const localPoint = fabric.util.transformPoint(point, invertedMatrix);
+
+    // Check if point is inside the clipPath polygon
+    return obj.clipPath.containsPoint(localPoint);
+}
+
 function handleCropClick(opt) {
     const pointer = canvas.getPointer(opt.e);
 
@@ -1394,23 +1645,40 @@ function handleCropClick(opt) {
         }
     }
 
-    // Method 3: Manually check all sheets using object-space coordinates
+    // Method 3: Use getBoundingRect for proper rotation handling
     if (!clickedSheetObj) {
         canvas.getObjects().forEach(obj => {
             if (obj.sheetData) {
-                // Check if point is within object bounds (object space)
-                const objLeft = obj.left;
-                const objTop = obj.top;
-                const objRight = objLeft + obj.width * (obj.scaleX || 1);
-                const objBottom = objTop + obj.height * (obj.scaleY || 1);
-
-                if (pointer.x >= objLeft && pointer.x <= objRight &&
-                    pointer.y >= objTop && pointer.y <= objBottom) {
+                // Use getBoundingRect which properly accounts for rotation
+                const bounds = obj.getBoundingRect();
+                if (pointer.x >= bounds.left && pointer.x <= bounds.left + bounds.width &&
+                    pointer.y >= bounds.top && pointer.y <= bounds.top + bounds.height) {
                     clickedSheetObj = obj;
-                    console.log('Method 3 - manual bounds:', obj.sheetData.name);
+                    console.log('Method 3 - bounding rect:', obj.sheetData.name);
                 }
             }
         });
+    }
+
+    // Method 4: Check if point is in visible area (not clipped)
+    if (clickedSheetObj && clickedSheetObj.clipPath) {
+        if (!isPointInVisibleArea(clickedSheetObj, pointer)) {
+            console.log('Point is in clipped area, looking for sheet underneath');
+            const clippedSheet = clickedSheetObj;
+            clickedSheetObj = null;
+            // Look for another sheet underneath
+            canvas.getObjects().forEach(obj => {
+                if (obj.sheetData && obj !== clippedSheet) {
+                    const bounds = obj.getBoundingRect();
+                    if (pointer.x >= bounds.left && pointer.x <= bounds.left + bounds.width &&
+                        pointer.y >= bounds.top && pointer.y <= bounds.top + bounds.height) {
+                        if (!obj.clipPath || isPointInVisibleArea(obj, pointer)) {
+                            clickedSheetObj = obj;
+                        }
+                    }
+                }
+            });
+        }
     }
 
     console.log('All sheets on canvas:', canvas.getObjects().filter(o => o.sheetData).length);
@@ -1710,6 +1978,184 @@ function flipSelectedSheetCut() {
 
     // Reapply with flipped direction
     applyCutMaskWithDirection(sheetObj, cutData.p1, cutData.p2, cutData.flipped);
+}
+
+// Split Sheet Tool - splits a sheet into two independent pieces
+let splitLine = null;
+let splitLineStart = null;
+let splitTargetSheet = null;
+let isSplitting = false;
+
+function handleSplitClick(opt) {
+    const pointer = canvas.getPointer(opt.e);
+
+    console.log('handleSplitClick called, pointer:', pointer, 'isSplitting:', isSplitting);
+
+    // Find sheet under click using same methods as crop
+    let clickedSheetObj = null;
+
+    if (opt.target && opt.target.sheetData) {
+        clickedSheetObj = opt.target;
+    }
+
+    if (!clickedSheetObj) {
+        const foundObj = canvas.findTarget(opt.e, true);
+        if (foundObj && foundObj.sheetData) {
+            clickedSheetObj = foundObj;
+        }
+    }
+
+    if (!clickedSheetObj) {
+        canvas.getObjects().forEach(obj => {
+            if (obj.sheetData) {
+                const bounds = obj.getBoundingRect();
+                if (pointer.x >= bounds.left && pointer.x <= bounds.left + bounds.width &&
+                    pointer.y >= bounds.top && pointer.y <= bounds.top + bounds.height) {
+                    clickedSheetObj = obj;
+                }
+            }
+        });
+    }
+
+    if (!isSplitting) {
+        if (!clickedSheetObj) {
+            console.log('Split line must start on a sheet');
+            return;
+        }
+
+        splitTargetSheet = clickedSheetObj;
+        selectSheet(splitTargetSheet.sheetData.id);
+        isSplitting = true;
+        splitLineStart = pointer;
+
+        console.log('Starting split line at:', pointer);
+
+        // Draw the split line (different color from cut)
+        splitLine = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
+            stroke: '#00ff00',  // Green for split
+            strokeWidth: 3,
+            strokeDashArray: [10, 5],
+            selectable: false,
+            evented: false
+        });
+        canvas.add(splitLine);
+        canvas.bringToFront(splitLine);
+        canvas.renderAll();
+    }
+}
+
+function handleSplitMove(opt) {
+    if (!isSplitting || !splitLine || !splitLineStart) return;
+
+    const pointer = canvas.getPointer(opt.e);
+    splitLine.set({ x2: pointer.x, y2: pointer.y });
+    canvas.renderAll();
+}
+
+async function handleSplitEnd(opt) {
+    if (!isSplitting || !splitLine || !splitLineStart || !splitTargetSheet) return;
+
+    const pointer = canvas.getPointer(opt.e);
+
+    // Calculate line length
+    const dx = pointer.x - splitLineStart.x;
+    const dy = pointer.y - splitLineStart.y;
+    const lineLength = Math.sqrt(dx * dx + dy * dy);
+
+    if (lineLength > 20) {
+        // Call API to split the sheet
+        try {
+            const response = await fetch(`/api/sheets/${splitTargetSheet.sheetData.id}/split/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCSRFToken()
+                },
+                body: JSON.stringify({
+                    p1: { x: splitLineStart.x, y: splitLineStart.y },
+                    p2: { x: pointer.x, y: pointer.y }
+                })
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                console.log('Sheet split successfully:', result);
+
+                // Apply cut mask to original sheet (one side)
+                const cutData = {
+                    p1: splitLineStart,
+                    p2: pointer,
+                    flipped: false
+                };
+                sheetCutData[splitTargetSheet.sheetData.id] = cutData;
+                applyCutMaskWithDirection(splitTargetSheet, splitLineStart, pointer, false);
+
+                // Add new sheet to canvas with opposite cut
+                const newSheet = result.new_sheet;
+                sheets.push(newSheet);
+                renderSheetLayers();
+
+                // Load the new sheet onto canvas
+                if (newSheet.rendered_image_url) {
+                    fabric.Image.fromURL(newSheet.rendered_image_url, function(img) {
+                        img.set({
+                            left: newSheet.offset_x,
+                            top: newSheet.offset_y,
+                            angle: newSheet.rotation,
+                            selectable: currentMode === 'select',
+                            evented: true,
+                            hasControls: true,
+                            hasBorders: true,
+                            hasRotatingPoint: true,
+                            lockScalingX: true,
+                            lockScalingY: true,
+                            lockUniScaling: true,
+                            lockRotation: false,
+                            cornerSize: 12,
+                            cornerColor: '#3498db',
+                            cornerStrokeColor: '#2980b9',
+                            transparentCorners: false,
+                            borderColor: '#3498db',
+                            rotatingPointOffset: 30,
+                        });
+                        img.setControlsVisibility({
+                            tl: false, tr: false, bl: false, br: false,
+                            ml: false, mt: false, mr: false, mb: false,
+                            mtr: true
+                        });
+                        img.sheetData = newSheet;
+                        canvas.add(img);
+
+                        // Apply opposite cut to new sheet
+                        const newCutData = {
+                            p1: { x: newSheet.crop_x, y: newSheet.crop_y },
+                            p2: { x: newSheet.crop_width, y: newSheet.crop_height },
+                            flipped: true  // Opposite side
+                        };
+                        sheetCutData[newSheet.id] = newCutData;
+                        applyCutMaskWithDirection(img, newCutData.p1, newCutData.p2, newCutData.flipped);
+
+                        canvas.renderAll();
+                    }, { crossOrigin: 'anonymous' });
+                }
+
+                alert('Sheet split successfully! The new sheet shows the opposite side.');
+            } else {
+                const error = await response.json();
+                alert('Error splitting sheet: ' + JSON.stringify(error));
+            }
+        } catch (error) {
+            console.error('Error splitting sheet:', error);
+            alert('Error splitting sheet');
+        }
+    }
+
+    // Clean up
+    canvas.remove(splitLine);
+    splitLine = null;
+    splitLineStart = null;
+    splitTargetSheet = null;
+    isSplitting = false;
 }
 
 // Close modals on outside click

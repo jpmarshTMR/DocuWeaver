@@ -11,6 +11,7 @@ urlpatterns = [
     path('projects/<int:project_pk>/sheets/', api_views.SheetListCreate.as_view(), name='sheet-list'),
     path('sheets/<int:pk>/', api_views.SheetDetail.as_view(), name='sheet-detail'),
     path('sheets/<int:pk>/render/', api_views.render_sheet, name='sheet-render'),
+    path('sheets/<int:pk>/split/', api_views.split_sheet, name='sheet-split'),
 
     # Assets
     path('projects/<int:project_pk>/assets/', api_views.AssetListCreate.as_view(), name='asset-list'),
