@@ -927,7 +927,8 @@ function createAssetShape(asset, x, y) {
     const type = asset.asset_type_data;
     const color = type ? type.color : '#FF0000';
     const size = type ? type.size : 20;
-    const shape = type ? type.icon_shape : 'circle';
+    // If a custom icon image has been uploaded, always use 'custom' rendering
+    const shape = (type && type.custom_icon) ? 'custom' : (type ? type.icon_shape : 'circle');
 
     let obj;
 
