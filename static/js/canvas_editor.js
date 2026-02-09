@@ -46,6 +46,13 @@ let refAssetId = '';             // Reference asset identifier
 let refPixelX = 0, refPixelY = 0; // Where reference was placed on canvas
 let verifyRefMarker = null;      // Canvas marker for reference point
 
+// Measurement tool state
+let measurePoints = [];          // Array of {x, y} canvas-coord points
+let measureMode = 'single';      // 'single' or 'chain'
+let measureOverlays = [];        // All fabric objects for batch cleanup
+let measurePreviewLine = null;   // Live dashed line from last point to cursor
+let measurePreviewLabel = null;  // Live distance label near cursor
+
 // Undo system
 const undoStack = [];
 const MAX_UNDO_STEPS = 50;
@@ -291,6 +298,8 @@ function setupCanvasEvents() {
             handleSplitClick(opt);
         } else if (currentMode === 'verify-asset') {
             handleVerifyClick(opt);
+        } else if (currentMode === 'measure') {
+            handleMeasureClick(opt);
         }
     });
 
@@ -315,6 +324,11 @@ function setupCanvasEvents() {
         // Handle split drag (same visual as crop)
         if (currentMode === 'split') {
             handleSplitMove(opt);
+        }
+
+        // Handle measurement live preview
+        if (currentMode === 'measure') {
+            handleMeasureMove(opt);
         }
     });
 
@@ -482,10 +496,22 @@ function setupKeyboardShortcuts() {
 // Mode Management
 function setMode(mode) {
     console.log('setMode called with:', mode, '(previous mode:', currentMode + ')');
+
+    // Clean up measurement overlays when leaving measure mode
+    if (currentMode === 'measure' && mode !== 'measure') {
+        clearMeasurements();
+    }
+
     currentMode = mode;
 
-    // Auto-deselect when entering crop or split mode
-    if (mode === 'crop' || mode === 'split') {
+    // Toggle measure panel visibility
+    const measurePanel = document.getElementById('measure-panel');
+    if (measurePanel) {
+        measurePanel.style.display = (mode === 'measure') ? 'block' : 'none';
+    }
+
+    // Auto-deselect when entering crop, split, or measure mode
+    if (mode === 'crop' || mode === 'split' || mode === 'measure') {
         canvas.discardActiveObject();
         selectedSheet = null;
         selectedAsset = null;
@@ -526,6 +552,10 @@ function setMode(mode) {
             canvas.defaultCursor = 'crosshair';
             break;
         case 'verify-asset':
+            canvas.defaultCursor = 'crosshair';
+            canvas.selection = false;
+            break;
+        case 'measure':
             canvas.defaultCursor = 'crosshair';
             canvas.selection = false;
             break;
@@ -1596,6 +1626,234 @@ function pixelToAssetMeter(pixelX, pixelY) {
     const my = (pixelY - PROJECT_DATA.origin_y) / ppm;
     const coord = metersToCoordOffset(mx, my, 0);
     return { x: coord.x, y: coord.y };
+}
+
+// -------------------------------------------------------------------------
+// Measurement Tool
+// -------------------------------------------------------------------------
+
+function calcMeasureDistance(p1, p2) {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const pixelDist = Math.sqrt(dx * dx + dy * dy);
+    const ppm = PROJECT_DATA.pixels_per_meter;
+    if (PROJECT_DATA.scale_calibrated && ppm && isFinite(ppm) && ppm > 0) {
+        return { pixels: pixelDist, meters: pixelDist / ppm, calibrated: true };
+    }
+    return { pixels: pixelDist, meters: null, calibrated: false };
+}
+
+function formatMeasureDistance(dist) {
+    if (dist.calibrated) {
+        if (dist.meters >= 1000) return `${(dist.meters / 1000).toFixed(2)} km`;
+        if (dist.meters >= 1) return `${dist.meters.toFixed(2)} m`;
+        return `${(dist.meters * 100).toFixed(1)} cm`;
+    }
+    return `${Math.round(dist.pixels)} px`;
+}
+
+function removeMeasurePreview() {
+    if (measurePreviewLine) { canvas.remove(measurePreviewLine); measurePreviewLine = null; }
+    if (measurePreviewLabel) { canvas.remove(measurePreviewLabel); measurePreviewLabel = null; }
+}
+
+function clearMeasurements() {
+    measureOverlays.forEach(obj => canvas.remove(obj));
+    measureOverlays = [];
+    removeMeasurePreview();
+    measurePoints = [];
+    updateMeasurePanel();
+    canvas.renderAll();
+}
+
+function toggleMeasureMode(mode) {
+    measureMode = mode;
+    clearMeasurements();
+}
+
+function toggleMeasurePanel() {
+    const panel = document.getElementById('measure-panel');
+    const isVisible = panel.style.display !== 'none';
+    if (isVisible) {
+        panel.style.display = 'none';
+        clearMeasurements();
+        setMode('pan');
+        return;
+    }
+    panel.style.display = 'block';
+    setMode('measure');
+}
+
+function handleMeasureClick(opt) {
+    // In single mode, auto-clear on 3rd click
+    if (measureMode === 'single' && measurePoints.length >= 2) {
+        clearMeasurements();
+    }
+
+    const pointer = canvas.getPointer(opt.e);
+
+    // Skip zero-length segments
+    if (measurePoints.length > 0) {
+        const last = measurePoints[measurePoints.length - 1];
+        const dx = pointer.x - last.x, dy = pointer.y - last.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 2) return;
+    }
+
+    measurePoints.push({ x: pointer.x, y: pointer.y });
+
+    // Draw point marker
+    const marker = new fabric.Circle({
+        radius: 4,
+        fill: '#00bcd4',
+        stroke: '#ffffff',
+        strokeWidth: 1,
+        left: pointer.x,
+        top: pointer.y,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false
+    });
+    canvas.add(marker);
+    canvas.bringToFront(marker);
+    measureOverlays.push(marker);
+
+    const n = measurePoints.length;
+    if (n >= 2) {
+        const p1 = measurePoints[n - 2];
+        const p2 = measurePoints[n - 1];
+
+        // Draw segment line (dashed)
+        const segLine = new fabric.Line([p1.x, p1.y, p2.x, p2.y], {
+            stroke: '#00bcd4',
+            strokeWidth: 1.5,
+            strokeUniform: true,
+            strokeDashArray: [8, 4],
+            selectable: false,
+            evented: false
+        });
+        canvas.add(segLine);
+        canvas.bringToFront(segLine);
+        measureOverlays.push(segLine);
+
+        // Draw segment distance label at midpoint
+        const dist = calcMeasureDistance(p1, p2);
+        const midX = (p1.x + p2.x) / 2;
+        const midY = (p1.y + p2.y) / 2;
+        const segLabel = new fabric.Text(formatMeasureDistance(dist), {
+            left: midX,
+            top: midY - 18,
+            fontSize: 12,
+            fill: '#ffffff',
+            backgroundColor: 'rgba(0, 188, 212, 0.85)',
+            fontFamily: 'monospace',
+            padding: 3,
+            selectable: false,
+            evented: false
+        });
+        canvas.add(segLabel);
+        canvas.bringToFront(segLabel);
+        measureOverlays.push(segLabel);
+    }
+
+    // In single mode with 2 points, remove preview
+    if (measureMode === 'single' && n >= 2) {
+        removeMeasurePreview();
+    }
+
+    updateMeasurePanel();
+    canvas.renderAll();
+}
+
+function handleMeasureMove(opt) {
+    if (measurePoints.length === 0) return;
+    if (measureMode === 'single' && measurePoints.length >= 2) return;
+
+    const pointer = canvas.getPointer(opt.e);
+    const lastPt = measurePoints[measurePoints.length - 1];
+
+    // Update or create preview line
+    if (!measurePreviewLine) {
+        measurePreviewLine = new fabric.Line(
+            [lastPt.x, lastPt.y, pointer.x, pointer.y],
+            { stroke: '#00bcd4', strokeWidth: 1, strokeUniform: true,
+              strokeDashArray: [4, 4], opacity: 0.6, selectable: false, evented: false }
+        );
+        canvas.add(measurePreviewLine);
+    } else {
+        measurePreviewLine.set({ x1: lastPt.x, y1: lastPt.y, x2: pointer.x, y2: pointer.y });
+    }
+    canvas.bringToFront(measurePreviewLine);
+
+    // Update or create preview label
+    const dist = calcMeasureDistance(lastPt, pointer);
+    const label = formatMeasureDistance(dist);
+    const midX = (lastPt.x + pointer.x) / 2;
+    const midY = (lastPt.y + pointer.y) / 2;
+    if (!measurePreviewLabel) {
+        measurePreviewLabel = new fabric.Text(label, {
+            left: midX, top: midY - 18, fontSize: 11, fill: '#ffffff',
+            backgroundColor: 'rgba(0, 188, 212, 0.5)', fontFamily: 'monospace',
+            padding: 3, selectable: false, evented: false
+        });
+        canvas.add(measurePreviewLabel);
+    } else {
+        measurePreviewLabel.set({ text: label, left: midX, top: midY - 18 });
+    }
+    canvas.bringToFront(measurePreviewLabel);
+    canvas.renderAll();
+}
+
+function updateMeasurePanel() {
+    const segmentList = document.getElementById('measure-segments');
+    const totalEl = document.getElementById('measure-total');
+    const straightEl = document.getElementById('measure-straight');
+    const straightRow = document.getElementById('measure-straight-row');
+    const warningEl = document.getElementById('measure-scale-warning');
+
+    if (!segmentList) return;
+
+    if (warningEl) {
+        warningEl.style.display = PROJECT_DATA.scale_calibrated ? 'none' : 'block';
+    }
+
+    segmentList.innerHTML = '';
+
+    if (measurePoints.length < 2) {
+        totalEl.textContent = '--';
+        straightEl.textContent = '--';
+        straightRow.style.display = 'none';
+        return;
+    }
+
+    let totalPixels = 0;
+    let totalMeters = 0;
+    let allCalibrated = true;
+
+    for (let i = 1; i < measurePoints.length; i++) {
+        const dist = calcMeasureDistance(measurePoints[i - 1], measurePoints[i]);
+        totalPixels += dist.pixels;
+        if (dist.calibrated) { totalMeters += dist.meters; } else { allCalibrated = false; }
+
+        const li = document.createElement('div');
+        li.style.cssText = 'padding: 0.2rem 0; font-size: 0.8rem; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between;';
+        li.innerHTML = `<span>Seg ${i}</span><span>${formatMeasureDistance(dist)}</span>`;
+        segmentList.appendChild(li);
+    }
+
+    const totalDist = allCalibrated
+        ? { pixels: totalPixels, meters: totalMeters, calibrated: true }
+        : { pixels: totalPixels, meters: null, calibrated: false };
+    totalEl.textContent = formatMeasureDistance(totalDist);
+
+    // Straight-line distance (chain mode with 3+ points)
+    if (measureMode === 'chain' && measurePoints.length >= 3) {
+        straightRow.style.display = 'flex';
+        const straightDist = calcMeasureDistance(measurePoints[0], measurePoints[measurePoints.length - 1]);
+        straightEl.textContent = formatMeasureDistance(straightDist);
+    } else {
+        straightRow.style.display = 'none';
+    }
 }
 
 function updateAssetPositionFromCanvas(obj) {

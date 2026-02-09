@@ -370,6 +370,40 @@
             <button class="tool-btn" data-mode="origin" onclick="setMode('origin')">
                 ⊕ Set Origin
             </button>
+            <button class="tool-btn" data-mode="measure" onclick="toggleMeasurePanel()">
+                📐 Measure
+            </button>
+            <div id="measure-panel" style="display: none; margin-top: 0.5rem; padding: 0.5rem; background: #f0f7ff; border: 1px solid #bee0ff; border-radius: 4px;">
+                <div id="measure-scale-warning" style="display: none; margin-bottom: 0.5rem; padding: 0.4rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; font-size: 0.8rem; color: #856404;">
+                    Scale not calibrated. Distances shown in pixels only.
+                </div>
+                <div style="margin-bottom: 0.5rem;">
+                    <label style="font-size: 0.8rem; color: #6c757d;">Measurement Type</label>
+                    <div style="display: flex; gap: 0.75rem; margin-top: 0.25rem;">
+                        <label style="font-size: 0.85rem; font-weight: normal; cursor: pointer;">
+                            <input type="radio" name="measure-type" value="single" checked
+                                   onchange="toggleMeasureMode('single')"> Single
+                        </label>
+                        <label style="font-size: 0.85rem; font-weight: normal; cursor: pointer;">
+                            <input type="radio" name="measure-type" value="chain"
+                                   onchange="toggleMeasureMode('chain')"> Chain
+                        </label>
+                    </div>
+                </div>
+                <div id="measure-segments" style="max-height: 120px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600; padding: 0.3rem 0; border-top: 1px solid #bee0ff;">
+                    <span>Total:</span>
+                    <span id="measure-total">--</span>
+                </div>
+                <div id="measure-straight-row" style="display: none; justify-content: space-between; font-size: 0.85rem; color: #6c757d; padding: 0.2rem 0;">
+                    <span>Straight line:</span>
+                    <span id="measure-straight">--</span>
+                </div>
+                <button class="tool-btn" style="margin-top: 0.5rem; font-size: 0.85em; text-align: center; width: 100%;"
+                        onclick="clearMeasurements()">
+                    Clear Measurements
+                </button>
+            </div>
         </div>
 
         <div class="tool-section">
