@@ -292,10 +292,21 @@ def import_batch_list(request, project_pk):
 def import_batch_delete(request, pk):
     """Delete an import batch and all its assets."""
     batch = get_object_or_404(ImportBatch, pk=pk)
+    project = batch.project
     asset_count = batch.assets.count()
     batch.assets.all().delete()
     batch.delete()
     logger.info("Deleted import batch %d (%d assets)", pk, asset_count)
+
+    # Clear calibration if no assets remain
+    if project.assets.count() == 0:
+        project.ref_asset_id = ''
+        project.ref_pixel_x = 0.0
+        project.ref_pixel_y = 0.0
+        project.asset_rotation = 0.0
+        project.save(update_fields=['ref_asset_id', 'ref_pixel_x', 'ref_pixel_y', 'asset_rotation'])
+        logger.info("Cleared asset calibration for project %d (no assets remain)", project.pk)
+
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -2943,6 +2943,23 @@ async function deleteImportBatch(batchId, filename) {
         // Reload assets and batch list
         const assetsResp = await fetch(`/api/projects/${PROJECT_ID}/assets/`);
         assets = await assetsResp.json();
+
+        // Clear calibration if no assets remain
+        if (assets.length === 0) {
+            refAssetId = '';
+            refPixelX = 0;
+            refPixelY = 0;
+            assetRotationDeg = 0;
+            PROJECT_DATA.ref_asset_id = '';
+            PROJECT_DATA.ref_pixel_x = 0;
+            PROJECT_DATA.ref_pixel_y = 0;
+            PROJECT_DATA.asset_rotation = 0;
+            if (verifyRefMarker) {
+                canvas.remove(verifyRefMarker);
+                verifyRefMarker = null;
+            }
+        }
+
         renderAssetList();
         refreshAssets();
         renderImportBatches();
