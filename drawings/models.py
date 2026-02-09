@@ -144,6 +144,15 @@ class AssetType(models.Model):
         verbose_name = "Asset Type"
         verbose_name_plural = "Asset Types"
 
+    def save(self, *args, **kwargs):
+        # Auto-sync icon_shape with custom_icon presence
+        if self.custom_icon:
+            self.icon_shape = 'custom'
+        elif self.icon_shape == 'custom':
+            # Reset to default if custom icon was removed
+            self.icon_shape = 'circle'
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
