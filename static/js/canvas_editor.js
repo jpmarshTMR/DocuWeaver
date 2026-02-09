@@ -53,6 +53,9 @@ let measureOverlays = [];        // All fabric objects for batch cleanup
 let measurePreviewLine = null;   // Live dashed line from last point to cursor
 let measurePreviewLabel = null;  // Live distance label near cursor
 
+// PDF inversion state
+let isPdfInverted = false;
+
 // Undo system
 const undoStack = [];
 const MAX_UNDO_STEPS = 50;
@@ -222,6 +225,14 @@ document.addEventListener('DOMContentLoaded', function() {
     refPixelY = PROJECT_DATA.ref_pixel_y || 0;
     document.getElementById('asset-rotation-slider').value = assetRotationDeg;
     document.getElementById('asset-rotation-input').value = assetRotationDeg;
+
+    // Initialize theme/invert state
+    isPdfInverted = (localStorage.getItem('pdftool-pdf-invert') === 'true');
+    applyCanvasTheme();
+    updatePdfInvertButton();
+    window.addEventListener('themechange', function() {
+        applyCanvasTheme();
+    });
 });
 
 function initCanvas() {
@@ -754,6 +765,13 @@ function renderSheetsOnCanvas() {
                 if (sheet.cuts_json && sheet.cuts_json.length > 0) {
                     sheetCutData[sheet.id] = sheet.cuts_json;
                     applyAllCuts(img, sheet.cuts_json);
+                }
+
+                // Apply PDF inversion if active
+                if (isPdfInverted) {
+                    if (!img.filters) img.filters = [];
+                    img.filters.push(new fabric.Image.filters.Invert());
+                    img.applyFilters();
                 }
 
                 sheetsLoaded++;
@@ -1423,10 +1441,10 @@ function updateVerifyRefInfo() {
             coordsSpan.textContent = `(${asset.current_x.toFixed(2)}m, ${asset.current_y.toFixed(2)}m)`;
             if (refAssetId === select.value && (refPixelX !== 0 || refPixelY !== 0)) {
                 placedSpan.textContent = `Reference placed at pixel (${refPixelX.toFixed(0)}, ${refPixelY.toFixed(0)})`;
-                placedSpan.style.color = '#28a745';
+                placedSpan.style.color = 'var(--border-layer-selected, #28a745)';
             } else {
                 placedSpan.textContent = 'Click on the drawing to set the reference location';
-                placedSpan.style.color = '#6c757d';
+                placedSpan.style.color = 'var(--text-muted, #6c757d)';
             }
         }
     } else {
@@ -1452,7 +1470,7 @@ function handleVerifyClick(opt) {
     // Update info display
     const placedSpan = document.getElementById('verify-ref-placed');
     placedSpan.textContent = `Reference placed at pixel (${refPixelX.toFixed(0)}, ${refPixelY.toFixed(0)})`;
-    placedSpan.style.color = '#28a745';
+    placedSpan.style.color = 'var(--border-layer-selected, #28a745)';
 
     // Live preview: re-render assets with current rotation
     refreshAssets();
@@ -1836,7 +1854,7 @@ function updateMeasurePanel() {
         if (dist.calibrated) { totalMeters += dist.meters; } else { allCalibrated = false; }
 
         const li = document.createElement('div');
-        li.style.cssText = 'padding: 0.2rem 0; font-size: 0.8rem; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between;';
+        li.style.cssText = 'padding: 0.2rem 0; font-size: 0.8rem; border-bottom: 1px solid var(--border-light, #e0e0e0); display: flex; justify-content: space-between;';
         li.innerHTML = `<span>Seg ${i}</span><span>${formatMeasureDistance(dist)}</span>`;
         segmentList.appendChild(li);
     }
@@ -3194,6 +3212,13 @@ async function handleSplitEnd(opt) {
                             applyAllCuts(img, newCuts);
                         }
 
+                        // Apply PDF inversion if active
+                        if (isPdfInverted) {
+                            if (!img.filters) img.filters = [];
+                            img.filters.push(new fabric.Image.filters.Invert());
+                            img.applyFilters();
+                        }
+
                         canvas.renderAll();
                     }, { crossOrigin: 'anonymous' });
                 }
@@ -3366,5 +3391,44 @@ async function deleteAsset(assetId, assetLabel) {
     } catch (err) {
         console.error('Error deleting asset:', err);
         alert('Error deleting asset');
+    }
+}
+
+// ==================== Dark Mode & PDF Inversion ====================
+
+function applyCanvasTheme() {
+    if (!canvas) return;
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    canvas.backgroundColor = isDark ? '#2a2a3a' : '#e0e0e0';
+    canvas.renderAll();
+}
+
+function togglePdfInvert() {
+    isPdfInverted = !isPdfInverted;
+    localStorage.setItem('pdftool-pdf-invert', isPdfInverted.toString());
+    applyPdfInversion();
+    updatePdfInvertButton();
+}
+
+function applyPdfInversion() {
+    canvas.getObjects().filter(function(obj) { return obj.sheetData; }).forEach(function(img) {
+        if (!img.filters) img.filters = [];
+        if (isPdfInverted) {
+            if (!img.filters.some(function(f) { return f.type === 'Invert'; })) {
+                img.filters.push(new fabric.Image.filters.Invert());
+            }
+        } else {
+            img.filters = img.filters.filter(function(f) { return f.type !== 'Invert'; });
+        }
+        img.applyFilters();
+    });
+    canvas.renderAll();
+}
+
+function updatePdfInvertButton() {
+    var btn = document.getElementById('pdf-invert-toggle');
+    if (btn) {
+        btn.classList.toggle('active', isPdfInverted);
+        btn.textContent = isPdfInverted ? '\u2600 Normal PDF' : '\u263D Invert PDF';
     }
 }

@@ -5,7 +5,7 @@
 {% block content %}
 <div class="container">
     <div style="margin-bottom: 1rem;">
-        <a href="{% url 'drawings:project_list' %}">&larr; Back to Projects</a>
+        <a href="{% url 'drawings:project_list' %}" style="color: var(--btn-primary);">&larr; Back to Projects</a>
     </div>
 
     <div class="card">
@@ -84,8 +84,8 @@
 </div>
 
 <!-- Upload PDF Modal -->
-<div id="uploadModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-    <div style="background: white; max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
+<div id="uploadModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-modal-overlay); z-index: 1000;">
+    <div style="background: var(--bg-modal); color: var(--text-primary); max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
         <h2 style="margin-bottom: 1rem;">Upload PDF Sheet</h2>
         <form id="uploadForm" enctype="multipart/form-data">
             <div class="form-group">
@@ -101,7 +101,7 @@
                 <input type="number" name="page_number" value="1" min="1">
             </div>
             <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <button type="button" class="btn" style="background: #6c757d;" onclick="hideUploadModal()">Cancel</button>
+                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideUploadModal()">Cancel</button>
                 <button type="submit" class="btn btn-success">Upload</button>
             </div>
         </form>
@@ -109,8 +109,8 @@
 </div>
 
 <!-- Import CSV Modal -->
-<div id="importModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-    <div style="background: white; max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
+<div id="importModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-modal-overlay); z-index: 1000;">
+    <div style="background: var(--bg-modal); color: var(--text-primary); max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
         <h2 style="margin-bottom: 1rem;">Import Assets from CSV</h2>
         <p class="text-muted" style="margin-bottom: 1rem;">
             CSV must have columns: asset_id, asset_type, x, y<br>
@@ -122,7 +122,7 @@
                 <input type="file" name="file" accept=".csv" required>
             </div>
             <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <button type="button" class="btn" style="background: #6c757d;" onclick="hideImportModal()">Cancel</button>
+                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideImportModal()">Cancel</button>
                 <button type="submit" class="btn btn-success">Import</button>
             </div>
         </form>

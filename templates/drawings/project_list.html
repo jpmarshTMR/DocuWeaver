@@ -32,7 +32,7 @@
                     <td class="text-muted">{{ project.created_at|date:"M d, Y" }}</td>
                     <td>
                         <a href="{% url 'drawings:editor' project.pk %}" class="btn">Open Editor</a>
-                        <a href="{% url 'drawings:project_detail' project.pk %}" class="btn" style="background: #6c757d;">Details</a>
+                        <a href="{% url 'drawings:project_detail' project.pk %}" class="btn" style="background: var(--btn-secondary);">Details</a>
                     </td>
                 </tr>
                 {% endfor %}
@@ -45,8 +45,8 @@
 </div>
 
 <!-- Create Project Modal -->
-<div id="createModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-    <div style="background: white; max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
+<div id="createModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-modal-overlay); z-index: 1000;">
+    <div style="background: var(--bg-modal); color: var(--text-primary); max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
         <h2 style="margin-bottom: 1rem;">Create New Project</h2>
         <form id="createForm">
             <div class="form-group">
@@ -58,7 +58,7 @@
                 <textarea name="description" rows="3"></textarea>
             </div>
             <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <button type="button" class="btn" style="background: #6c757d;" onclick="hideCreateModal()">Cancel</button>
+                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideCreateModal()">Cancel</button>
                 <button type="submit" class="btn btn-success">Create Project</button>
             </div>
         </form>
