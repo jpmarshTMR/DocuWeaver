@@ -943,7 +943,7 @@ function createAssetShape(asset, x, y) {
     });
 
     // Add label
-    const label = new fabric.Text(asset.asset_id, {
+    const label = new fabric.Text(asset.name || asset.asset_id, {
         fontSize: 10,
         fill: '#000',
         left: x + size / 2 + 3,
