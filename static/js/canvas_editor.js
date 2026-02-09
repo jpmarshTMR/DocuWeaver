@@ -176,7 +176,14 @@ async function undoCut(data) {
             applyAllCuts(sheetObj, previousCutData);
         } else {
             sheetObj.clipPath = null;
+            sheetObj._clipPolygon = null;
+            if (sheetObj._originalRender) {
+                sheetObj._render = sheetObj._originalRender;
+                delete sheetObj._originalRender;
+            }
             delete sheetCutData[sheetId];
+            sheetObj.objectCaching = true;
+            sheetObj.dirty = true;
             canvas.renderAll();
         }
 
@@ -2631,15 +2638,25 @@ function removeCutStats() {
 }
 
 function isPointInVisibleArea(obj, pointer) {
-    if (!obj.clipPath) return true;
+    if (!obj._clipPolygon) return true;
 
     // Convert pointer to object-local coordinates
     const point = new fabric.Point(pointer.x, pointer.y);
     const invertedMatrix = fabric.util.invertTransform(obj.calcTransformMatrix());
     const localPoint = fabric.util.transformPoint(point, invertedMatrix);
 
-    // Check if point is inside the clipPath polygon
-    return obj.clipPath.containsPoint(localPoint);
+    // Ray-casting point-in-polygon test against the clip polygon
+    var inside = false;
+    var poly = obj._clipPolygon;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        var xi = poly[i].x, yi = poly[i].y;
+        var xj = poly[j].x, yj = poly[j].y;
+        if (((yi > localPoint.y) !== (yj > localPoint.y)) &&
+            (localPoint.x < (xj - xi) * (localPoint.y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
 }
 
 function handleCropClick(opt) {
@@ -2681,7 +2698,7 @@ function handleCropClick(opt) {
     }
 
     // Method 4: Check if point is in visible area (not clipped)
-    if (clickedSheetObj && clickedSheetObj.clipPath) {
+    if (clickedSheetObj && clickedSheetObj._clipPolygon) {
         if (!isPointInVisibleArea(clickedSheetObj, pointer)) {
             console.log('Point is in clipped area, looking for sheet underneath');
             const clippedSheet = clickedSheetObj;
@@ -2692,7 +2709,7 @@ function handleCropClick(opt) {
                     const bounds = obj.getBoundingRect();
                     if (pointer.x >= bounds.left && pointer.x <= bounds.left + bounds.width &&
                         pointer.y >= bounds.top && pointer.y <= bounds.top + bounds.height) {
-                        if (!obj.clipPath || isPointInVisibleArea(obj, pointer)) {
+                        if (!obj._clipPolygon || isPointInVisibleArea(obj, pointer)) {
                             clickedSheetObj = obj;
                         }
                     }
@@ -2928,10 +2945,18 @@ function computeMultiCutPolygon(sheetObj, cuts) {
 
 /**
  * Apply all cuts for a sheet, computing the composite clip polygon.
+ * Uses native Canvas 2D clip() instead of Fabric.js clipPath to avoid
+ * caching/compositing issues when filters (PDF inversion) are active.
  */
 function applyAllCuts(sheetObj, cuts) {
     if (!cuts || cuts.length === 0) {
+        // Remove custom clip rendering
+        sheetObj._clipPolygon = null;
         sheetObj.clipPath = null;
+        if (sheetObj._originalRender) {
+            sheetObj._render = sheetObj._originalRender;
+            delete sheetObj._originalRender;
+        }
         sheetObj.objectCaching = true;
         sheetObj.dirty = true;
         canvas.renderAll();
@@ -2942,30 +2967,41 @@ function applyAllCuts(sheetObj, cuts) {
 
     if (!polygon || polygon.length < 3) {
         console.warn('All cuts clip away the entire sheet');
+        sheetObj._clipPolygon = null;
         sheetObj.clipPath = null;
         sheetObj.dirty = true;
         canvas.renderAll();
         return;
     }
 
-    const clipPath = new fabric.Polygon(polygon, {
-        originX: 'center',
-        originY: 'center',
-        absolutePositioned: false,
-        objectCaching: false
-    });
-    // Compensate for pathOffset so polygon points map correctly
-    // to the image's center-based local coordinate space
-    if (clipPath.pathOffset) {
-        clipPath.left = clipPath.pathOffset.x;
-        clipPath.top = clipPath.pathOffset.y;
-    }
+    // Store polygon for manual clipping (points are in image-local
+    // center-based coords, matching the _render coordinate space)
+    sheetObj._clipPolygon = polygon;
+    sheetObj.clipPath = null;  // Don't use Fabric.js clipPath
 
-    sheetObj.clipPath = clipPath;
-    sheetObj.objectCaching = true;
-    if (sheetObj.clipPath.setCoords) {
-        sheetObj.clipPath.setCoords();
+    // Override _render to apply native canvas clip() before drawing.
+    // This avoids destination-in compositing and cache interaction bugs.
+    if (!sheetObj._originalRender) {
+        sheetObj._originalRender = sheetObj._render;
     }
+    sheetObj._render = function(ctx) {
+        if (this._clipPolygon && this._clipPolygon.length >= 3) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(this._clipPolygon[0].x, this._clipPolygon[0].y);
+            for (var i = 1; i < this._clipPolygon.length; i++) {
+                ctx.lineTo(this._clipPolygon[i].x, this._clipPolygon[i].y);
+            }
+            ctx.closePath();
+            ctx.clip();
+        }
+        this._originalRender(ctx);
+        if (this._clipPolygon) {
+            ctx.restore();
+        }
+    };
+
+    sheetObj.objectCaching = false;
     sheetObj.dirty = true;
     canvas.renderAll();
 }
@@ -2998,10 +3034,17 @@ async function saveCutData(sheetId, cuts) {
 }
 
 function clearSheetCut(sheetId) {
-    // Find the sheet object and remove its clip path
+    // Find the sheet object and remove its clip
     canvas.getObjects().forEach(obj => {
         if (obj.sheetData && obj.sheetData.id === sheetId) {
             obj.clipPath = null;
+            obj._clipPolygon = null;
+            if (obj._originalRender) {
+                obj._render = obj._originalRender;
+                delete obj._originalRender;
+            }
+            obj.objectCaching = true;
+            obj.dirty = true;
             canvas.renderAll();
         }
     });
@@ -3515,13 +3558,7 @@ function applyPdfInversion() {
             img.filters = img.filters.filter(function(f) { return f.type !== 'Invert'; });
         }
         img.applyFilters();
-
-        // Re-apply cuts after filter change since applyFilters() can
-        // interfere with clipPath rendering and objectCaching state
-        var sheetId = img.sheetData.id;
-        if (sheetCutData[sheetId] && sheetCutData[sheetId].length > 0) {
-            applyAllCuts(img, sheetCutData[sheetId]);
-        }
+        img.dirty = true;
     });
     canvas.renderAll();
 }
