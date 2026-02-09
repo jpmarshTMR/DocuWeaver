@@ -1305,6 +1305,15 @@ function toggleVerifyPanel() {
     select.onchange = updateVerifyRefInfo;
 }
 
+function filterVerifyAssetSelect(query) {
+    const select = document.getElementById('verify-asset-select');
+    const q = query.toLowerCase();
+    for (const opt of select.options) {
+        if (!opt.value) continue;  // Keep the "-- Select --" placeholder
+        opt.style.display = opt.textContent.toLowerCase().includes(q) ? '' : 'none';
+    }
+}
+
 function updateVerifyRefInfo() {
     const select = document.getElementById('verify-asset-select');
     const infoDiv = document.getElementById('verify-ref-info');
