@@ -1,5 +1,5 @@
 """
-Django settings for pdftool project.
+Django settings for docuweaver project.
 """
 import os
 from pathlib import Path
@@ -45,7 +45,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'pdftool.urls'
+ROOT_URLCONF = 'docuweaver.urls'
 
 TEMPLATES = [
     {
@@ -63,7 +63,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'pdftool.wsgi.application'
+WSGI_APPLICATION = 'docuweaver.wsgi.application'
 
 DATABASES = {
     'default': {

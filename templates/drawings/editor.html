@@ -1092,7 +1092,7 @@
             if (icon) icon.textContent = (theme === 'dark') ? '\u2600' : '\u263D';
             if (label) label.textContent = (theme === 'dark') ? 'Light Mode' : 'Dark Mode';
         }
-        var t = localStorage.getItem('pdftool-theme') || 'light';
+        var t = localStorage.getItem('docuweaver-theme') || 'light';
         updateDarkModeToggle(t);
         window.addEventListener('themechange', function(e) {
             updateDarkModeToggle(e.detail.theme);

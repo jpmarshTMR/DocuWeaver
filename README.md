@@ -1,4 +1,4 @@
-# PDFTool
+# DocuWeaver
 
 A Django-based PDF alignment and asset overlay tool. Upload multi-page PDF drawings, stitch and crop sheets on an interactive canvas, then plot geo-referenced assets from CSV data.
 
@@ -34,7 +34,7 @@ A Django-based PDF alignment and asset overlay tool. Upload multi-page PDF drawi
 ```bash
 # Clone the repo
 git clone <repo-url>
-cd pdftool
+cd docuweaver
 
 # Create a virtual environment
 python -m venv venv
@@ -82,8 +82,8 @@ pytest
 ## Project Structure
 
 ```
-pdftool/
-  pdftool/          # Django project settings & URLs
+docuweaver/
+  docuweaver/       # Django project settings & URLs
   drawings/         # Main app
     models.py       # Project, Sheet, Asset, ImportBatch, etc.
     api_views.py    # REST API endpoints

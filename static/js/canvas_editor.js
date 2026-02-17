@@ -235,7 +235,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('asset-rotation-input').value = assetRotationDeg;
 
     // Initialize theme/invert state
-    isPdfInverted = (localStorage.getItem('pdftool-pdf-invert') === 'true');
+    isPdfInverted = (localStorage.getItem('docuweaver-pdf-invert') === 'true');
     applyCanvasTheme();
     updatePdfInvertButton();
     window.addEventListener('themechange', function() {
@@ -3812,7 +3812,7 @@ function applyCanvasTheme() {
 
 function togglePdfInvert() {
     isPdfInverted = !isPdfInverted;
-    localStorage.setItem('pdftool-pdf-invert', isPdfInverted.toString());
+    localStorage.setItem('docuweaver-pdf-invert', isPdfInverted.toString());
     applyPdfInversion();
     updatePdfInvertButton();
 }

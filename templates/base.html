@@ -206,7 +206,7 @@
     </style>
     <script>
     (function(){
-        var t = localStorage.getItem('pdftool-theme') || 'light';
+        var t = localStorage.getItem('docuweaver-theme') || 'light';
         if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
     })();
     </script>
@@ -228,7 +228,7 @@
         var html = document.documentElement;
         var next = (html.getAttribute('data-theme') === 'dark') ? 'light' : 'dark';
         html.setAttribute('data-theme', next);
-        localStorage.setItem('pdftool-theme', next);
+        localStorage.setItem('docuweaver-theme', next);
         updateThemeIcon(next);
         window.dispatchEvent(new CustomEvent('themechange', { detail: { theme: next } }));
     }
@@ -237,7 +237,7 @@
         if (btn) btn.textContent = (theme === 'dark') ? '\u2600' : '\u263D';
     }
     (function(){
-        var t = localStorage.getItem('pdftool-theme') || 'light';
+        var t = localStorage.getItem('docuweaver-theme') || 'light';
         updateThemeIcon(t);
     })();
     </script>
