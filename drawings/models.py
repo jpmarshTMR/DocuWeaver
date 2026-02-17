@@ -260,6 +260,56 @@ class AdjustmentLog(models.Model):
         super().save(*args, **kwargs)
 
 
+class Link(models.Model):
+    """A polyline link connecting multiple coordinate points."""
+    LINK_TYPE_CHOICES = [
+        ('pipe', 'Pipe'),
+        ('cable', 'Cable'),
+        ('conduit', 'Conduit'),
+        ('duct', 'Duct'),
+        ('main', 'Main'),
+        ('service', 'Service'),
+        ('other', 'Other'),
+    ]
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='links')
+    import_batch = models.ForeignKey('ImportBatch', on_delete=models.SET_NULL, null=True, blank=True, related_name='links')
+
+    # Identifier from source data
+    link_id = models.CharField(max_length=100)
+    name = models.CharField(max_length=255, blank=True)
+
+    # Coordinates as array of [lon, lat] pairs
+    # Format: [[lon1, lat1], [lon2, lat2], ...]
+    coordinates = models.JSONField(
+        help_text='Array of [longitude, latitude] coordinate pairs, e.g. [[145.74, -16.96], [145.75, -16.95]]'
+    )
+
+    # Display properties
+    color = models.CharField(max_length=7, default='#0066FF', help_text="Hex color code")
+    width = models.PositiveIntegerField(default=2, help_text="Line width in pixels")
+    opacity = models.FloatField(default=1.0, help_text="Opacity from 0.0 to 1.0")
+    link_type = models.CharField(max_length=20, choices=LINK_TYPE_CHOICES, default='other')
+
+    # Additional metadata from CSV
+    metadata = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['link_id']
+        unique_together = ['project', 'link_id']
+
+    def __str__(self):
+        return f"{self.link_id} - {self.name or self.link_type}"
+
+    @property
+    def point_count(self):
+        """Return the number of coordinate points in this link."""
+        return len(self.coordinates) if self.coordinates else 0
+
+
 class ColumnPreset(models.Model):
     """Admin-managed mapping of known CSV column names to import roles."""
     ROLE_CHOICES = [

@@ -27,6 +27,8 @@ let selectedSheet = null;
 let selectedAsset = null;
 let sheets = [];
 let assets = [];
+let links = [];  // Link layer data
+let linksVisible = true;  // Link layer visibility
 let calibrationPoints = [];
 
 // Crop/Cut tool state
@@ -627,10 +629,16 @@ async function loadProjectData() {
         const assetsResponse = await fetch(`/api/projects/${PROJECT_ID}/assets/`);
         assets = await assetsResponse.json();
 
+        // Load links
+        const linksResponse = await fetch(`/api/projects/${PROJECT_ID}/links/`);
+        links = await linksResponse.json();
+
         renderSheetLayers();
         renderAssetList();
         renderSheetsOnCanvas();
         renderAssetsOnCanvas();
+        renderLinksOnCanvas();
+        renderLinkList();
         renderImportBatches();
 
         // Restore reference point marker if configured
@@ -1114,6 +1122,143 @@ function createStarPoints(cx, cy, spikes, outerRadius, innerRadius) {
     }
 
     return points;
+}
+
+/**
+ * Render all links on the canvas as polylines.
+ * Links are rendered if a reference point has been placed (same as assets).
+ */
+function renderLinksOnCanvas() {
+    // Remove existing link objects
+    const existingLinks = canvas.getObjects().filter(obj => obj.isLinkObject);
+    existingLinks.forEach(obj => canvas.remove(obj));
+
+    // Only render links if a reference point has been placed
+    if (!refAssetId || (refPixelX === 0 && refPixelY === 0)) {
+        return;
+    }
+
+    // Only render if links are visible
+    if (!linksVisible) {
+        canvas.renderAll();
+        return;
+    }
+
+    links.forEach(link => {
+        if (!link.coordinates || link.coordinates.length < 2) return;
+
+        // Convert coordinates to pixel positions
+        const points = link.coordinates.map(coord => {
+            // coordinates are [lon, lat] which map to [x, y]
+            const pos = assetMeterToPixel(coord[0], coord[1]);
+            return { x: pos.x, y: pos.y };
+        });
+
+        // Create polyline
+        const polyline = new fabric.Polyline(points, {
+            fill: 'transparent',
+            stroke: link.color || '#0066FF',
+            strokeWidth: link.width || 2,
+            opacity: link.opacity || 1.0,
+            selectable: false,
+            evented: false,
+            isLinkObject: true,
+            linkData: link
+        });
+
+        canvas.add(polyline);
+        // Send links to back (below assets but above sheets)
+        polyline.sendToBack();
+    });
+
+    canvas.renderAll();
+}
+
+/**
+ * Render the link list in the sidebar panel.
+ */
+function renderLinkList() {
+    const container = document.getElementById('link-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // Update count display
+    const countEl = document.getElementById('link-count');
+    if (countEl) countEl.textContent = links.length;
+
+    if (links.length === 0) {
+        container.innerHTML = '<p class="text-muted small">No links loaded</p>';
+        return;
+    }
+
+    links.forEach(link => {
+        const div = document.createElement('div');
+        div.className = 'link-item d-flex align-items-center py-1 px-2 border-bottom';
+        div.dataset.linkId = link.id;
+
+        // Color indicator
+        const colorDot = document.createElement('span');
+        colorDot.style.cssText = `
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            background-color: ${link.color || '#0066FF'};
+            margin-right: 8px;
+            flex-shrink: 0;
+        `;
+
+        // Link name/id
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'text-truncate flex-grow-1';
+        nameSpan.textContent = link.name || link.link_id;
+        nameSpan.title = `${link.link_id} (${link.point_count} points)`;
+
+        // Type badge
+        const typeBadge = document.createElement('span');
+        typeBadge.className = 'badge bg-secondary ms-2';
+        typeBadge.textContent = link.link_type || 'other';
+        typeBadge.style.fontSize = '0.7em';
+
+        div.appendChild(colorDot);
+        div.appendChild(nameSpan);
+        div.appendChild(typeBadge);
+
+        // Click handler to highlight link
+        div.addEventListener('click', () => highlightLink(link));
+
+        container.appendChild(div);
+    });
+}
+
+/**
+ * Highlight a link on the canvas briefly.
+ */
+function highlightLink(link) {
+    const linkObjs = canvas.getObjects().filter(obj => obj.isLinkObject && obj.linkData && obj.linkData.id === link.id);
+    if (linkObjs.length === 0) return;
+
+    const obj = linkObjs[0];
+    const originalStroke = obj.stroke;
+    const originalWidth = obj.strokeWidth;
+
+    // Flash highlight
+    obj.set({ stroke: '#FFD700', strokeWidth: originalWidth + 2 });
+    canvas.renderAll();
+
+    setTimeout(() => {
+        obj.set({ stroke: originalStroke, strokeWidth: originalWidth });
+        canvas.renderAll();
+    }, 500);
+}
+
+/**
+ * Toggle link layer visibility.
+ */
+function toggleLinksVisibility(visible) {
+    linksVisible = visible;
+    renderLinksOnCanvas();
 }
 
 // Context-sensitive floating toolbar buttons
@@ -2852,6 +2997,149 @@ async function importWithMapping() {
         }
     } catch (error) {
         console.error('Import error:', error);
+    }
+}
+
+// Link CSV Import — Two-step flow
+let importLinksCsvFile = null;
+let importLinksCsvHeaders = [];
+
+function showImportLinksModal() {
+    // Reset to step 1
+    document.getElementById('import-links-step-1').style.display = 'block';
+    document.getElementById('import-links-step-2').style.display = 'none';
+    document.getElementById('import-links-csv-file').value = '';
+    importLinksCsvFile = null;
+    importLinksCsvHeaders = [];
+    document.getElementById('importLinksModal').style.display = 'block';
+}
+
+function hideImportLinksModal() {
+    document.getElementById('importLinksModal').style.display = 'none';
+}
+
+async function importLinksStepNext() {
+    const fileInput = document.getElementById('import-links-csv-file');
+    if (!fileInput.files.length) {
+        alert('Please select a CSV file.');
+        return;
+    }
+
+    importLinksCsvFile = fileInput.files[0];
+
+    // Parse CSV headers client-side
+    try {
+        const text = await importLinksCsvFile.text();
+        const firstLine = text.split('\n')[0].trim();
+        importLinksCsvHeaders = firstLine.split(',').map(h => h.trim().replace(/^["']|["']$/g, ''));
+
+        if (importLinksCsvHeaders.length === 0) {
+            alert('Could not parse CSV headers.');
+            return;
+        }
+    } catch (err) {
+        alert('Error reading CSV file: ' + err.message);
+        return;
+    }
+
+    // Show preview of detected columns
+    const preview = document.getElementById('import-links-csv-preview');
+    preview.textContent = 'Detected columns: ' + importLinksCsvHeaders.join(', ');
+
+    // Populate dropdowns
+    const roles = [
+        { id: 'map-link-id', role: 'link_id', required: true },
+        { id: 'map-coordinates', role: 'coordinates', required: true },
+        { id: 'map-link-name', role: 'name', required: false },
+        { id: 'map-link-type', role: 'link_type', required: false },
+    ];
+
+    roles.forEach(({ id, role, required }) => {
+        const select = document.getElementById(id);
+        select.innerHTML = '';
+
+        if (!required) {
+            const noneOpt = document.createElement('option');
+            noneOpt.value = '';
+            noneOpt.textContent = '-- None --';
+            select.appendChild(noneOpt);
+        }
+
+        importLinksCsvHeaders.forEach(header => {
+            const opt = document.createElement('option');
+            opt.value = header;
+            opt.textContent = header;
+            select.appendChild(opt);
+        });
+
+        // Auto-match by name
+        const match = importLinksCsvHeaders.find(h => 
+            h.toLowerCase().includes(role.toLowerCase()) ||
+            h.toLowerCase() === role.toLowerCase() ||
+            (role === 'link_id' && (h.toLowerCase().includes('id') || h.toLowerCase().includes('link'))) ||
+            (role === 'coordinates' && (h.toLowerCase().includes('coord') || h.toLowerCase().includes('geom')))
+        );
+        if (match) {
+            select.value = match;
+        }
+    });
+
+    // Switch to step 2
+    document.getElementById('import-links-step-1').style.display = 'none';
+    document.getElementById('import-links-step-2').style.display = 'block';
+}
+
+function importLinksStepBack() {
+    document.getElementById('import-links-step-2').style.display = 'none';
+    document.getElementById('import-links-step-1').style.display = 'block';
+}
+
+async function importLinksWithMapping() {
+    if (!importLinksCsvFile) {
+        alert('No CSV file selected.');
+        return;
+    }
+
+    const mapping = {
+        link_id: document.getElementById('map-link-id').value,
+        coordinates: document.getElementById('map-coordinates').value,
+    };
+
+    // Validate required fields
+    if (!mapping.link_id || !mapping.coordinates) {
+        alert('Please select columns for Link ID and Coordinates.');
+        return;
+    }
+
+    const nameCol = document.getElementById('map-link-name').value;
+    if (nameCol) mapping.name = nameCol;
+
+    const typeCol = document.getElementById('map-link-type').value;
+    if (typeCol) mapping.link_type = typeCol;
+
+    const formData = new FormData();
+    formData.append('file', importLinksCsvFile);
+    formData.append('column_mapping', JSON.stringify(mapping));
+
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/import-links-csv/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: formData
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+            alert(`Link import complete:\n${result.created} created\n${result.updated} updated\n${result.errors.length} errors`);
+            hideImportLinksModal();
+            loadProjectData();
+        } else {
+            alert('Error: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Link import error:', error);
     }
 }
 

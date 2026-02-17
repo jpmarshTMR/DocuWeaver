@@ -1,6 +1,6 @@
 """DRF Serializers for drawings app."""
 from rest_framework import serializers
-from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ImportBatch
+from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ImportBatch, Link
 
 
 class AssetTypeSerializer(serializers.ModelSerializer):
@@ -126,3 +126,42 @@ class ProjectListSerializer(serializers.ModelSerializer):
 
     def get_asset_count(self, obj):
         return obj.assets.count()
+
+
+class LinkSerializer(serializers.ModelSerializer):
+    """Serializer for Link model with coordinate validation."""
+    import_batch_name = serializers.CharField(source='import_batch.filename', read_only=True, default=None)
+    point_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Link
+        fields = [
+            'id', 'project', 'link_id', 'name', 'coordinates',
+            'color', 'width', 'opacity', 'link_type',
+            'metadata', 'import_batch', 'import_batch_name', 'point_count',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['project']
+
+    def validate_coordinates(self, value):
+        """Validate coordinates is a list of [lon, lat] pairs."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Coordinates must be a list")
+        if len(value) < 2:
+            raise serializers.ValidationError("Coordinates must have at least 2 points")
+
+        for i, point in enumerate(value):
+            if not isinstance(point, (list, tuple)):
+                raise serializers.ValidationError(f"Point {i} must be a [lon, lat] array")
+            if len(point) != 2:
+                raise serializers.ValidationError(f"Point {i} must have exactly 2 values [lon, lat]")
+            try:
+                lon, lat = float(point[0]), float(point[1])
+                # Basic range validation for geographic coordinates
+                if not (-180 <= lon <= 180):
+                    raise serializers.ValidationError(f"Point {i} longitude {lon} out of range [-180, 180]")
+                if not (-90 <= lat <= 90):
+                    raise serializers.ValidationError(f"Point {i} latitude {lat} out of range [-90, 90]")
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(f"Point {i} must contain numeric values")
+        return value

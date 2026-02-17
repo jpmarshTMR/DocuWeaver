@@ -18,6 +18,11 @@ urlpatterns = [
     path('assets/<int:pk>/', api_views.AssetDetail.as_view(), name='asset-detail'),
     path('assets/<int:pk>/adjust/', api_views.adjust_asset, name='asset-adjust'),
 
+    # Links
+    path('projects/<int:project_pk>/links/', api_views.LinkListCreate.as_view(), name='link-list'),
+    path('links/<int:pk>/', api_views.LinkDetail.as_view(), name='link-detail'),
+    path('projects/<int:project_pk>/import-links-csv/', api_views.import_links_csv, name='import-links-csv'),
+
     # CSV Import
     path('projects/<int:project_pk>/import-csv/', api_views.import_csv, name='import-csv'),
     path('column-presets/', api_views.column_presets, name='column-presets'),

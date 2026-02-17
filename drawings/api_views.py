@@ -9,16 +9,16 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Project, Sheet, Asset, AdjustmentLog, AssetType, ColumnPreset, ImportBatch
+from .models import Project, Sheet, Asset, AdjustmentLog, AssetType, ColumnPreset, ImportBatch, Link
 
 logger = logging.getLogger(__name__)
 from .serializers import (
     ProjectSerializer, ProjectListSerializer,
     SheetSerializer, AssetSerializer, AdjustmentLogSerializer,
-    ImportBatchSerializer
+    ImportBatchSerializer, LinkSerializer
 )
 from .services.pdf_processor import render_pdf_page, get_pdf_page_count
-from .services.csv_importer import import_assets_from_csv
+from .services.csv_importer import import_assets_from_csv, import_links_from_csv
 from .services.export_service import export_sheet_with_overlays, generate_adjustment_report
 
 
@@ -146,6 +146,24 @@ class AssetDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = AssetSerializer
 
 
+class LinkListCreate(generics.ListCreateAPIView):
+    """List and create links for a project."""
+    serializer_class = LinkSerializer
+
+    def get_queryset(self):
+        return Link.objects.filter(project_id=self.kwargs['project_pk'])
+
+    def perform_create(self, serializer):
+        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
+        serializer.save(project=project)
+
+
+class LinkDetail(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update or delete a specific link."""
+    queryset = Link.objects.all()
+    serializer_class = LinkSerializer
+
+
 @api_view(['POST'])
 def adjust_asset(request, pk):
     """Adjust an asset's position and log the change."""
@@ -223,6 +241,40 @@ def import_csv(request, project_pk):
     except Exception as e:
         logger.error("CSV import failed for project %d: %s", project_pk, e)
         return Response({'error': 'CSV import failed'}, status=400)
+
+
+@api_view(['POST'])
+def import_links_csv(request, project_pk):
+    """Import links from CSV file with column mapping."""
+    project = get_object_or_404(Project, pk=project_pk)
+
+    if 'file' not in request.FILES:
+        return Response({'error': 'No file provided'}, status=400)
+
+    csv_file = request.FILES['file']
+
+    # Parse column_mapping if provided (JSON string in form data)
+    column_mapping = None
+    mapping_raw = request.data.get('column_mapping')
+    if mapping_raw:
+        try:
+            column_mapping = json.loads(mapping_raw) if isinstance(mapping_raw, str) else mapping_raw
+        except (json.JSONDecodeError, TypeError):
+            return Response({'error': 'Invalid column_mapping JSON'}, status=400)
+
+    try:
+        result = import_links_from_csv(
+            project, csv_file,
+            column_mapping=column_mapping,
+            filename=csv_file.name,
+        )
+        return Response(result)
+    except ValueError as e:
+        logger.error("Link CSV import failed for project %d: %s", project_pk, e)
+        return Response({'error': str(e)}, status=400)
+    except Exception as e:
+        logger.error("Link CSV import failed for project %d: %s", project_pk, e)
+        return Response({'error': 'Link CSV import failed'}, status=400)
 
 
 @api_view(['POST'])
