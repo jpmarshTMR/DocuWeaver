@@ -619,6 +619,98 @@
         float: right;
     }
     .asset-delete-btn:hover { opacity: 1; }
+    
+    /* Toggle Switch for Cadastre Layer */
+    .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 40px;
+        height: 20px;
+    }
+    
+    .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.3s;
+        border-radius: 20px;
+    }
+    
+    .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: 0.3s;
+        border-radius: 50%;
+    }
+    
+    input:checked + .toggle-slider {
+        background-color: var(--btn-success, #27ae60);
+    }
+    
+    input:checked + .toggle-slider:before {
+        transform: translateX(20px);
+    }
+    
+    /* Toggle Switch for Cadastre Layer */
+    .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 40px;
+        height: 20px;
+    }
+    
+    .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.3s;
+        border-radius: 20px;
+    }
+    
+    .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: 0.3s;
+        border-radius: 50%;
+    }
+    
+    input:checked + .toggle-slider {
+        background-color: var(--btn-success, #27ae60);
+    }
+    
+    input:checked + .toggle-slider:before {
+        transform: translateX(20px);
+    }
 </style>
 {% endblock %}
 
@@ -723,6 +815,74 @@
                     <button class="btn" style="width: 100%; margin-top: 0.5rem;" onclick="showUploadModal()">
                         + Add Sheet
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cadastre Layer -->
+        <div class="tool-section">
+            <div class="layer-group">
+                <div class="layer-group-header" onclick="toggleLayerGroup('cadastre')">
+                    <span class="layer-group-chevron" id="cadastre-chevron">&#9660;</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">Cadastre Layer</span>
+                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle cadastre layer visibility">
+                        <input type="checkbox" id="cadastre-layer-vis" checked onchange="toggleCadastreVisibility(this.checked)">
+                    </label>
+                </div>
+                <div class="layer-group-body" id="cadastre-group-body">
+                    <div id="cadastre-no-ref" style="display: none; padding: 0.5rem; background: var(--bg-warning); border: 1px solid var(--border-warning); border-radius: 4px; font-size: 0.8rem; color: var(--text-warning); margin-bottom: 0.5rem;">
+                        ⚠️ Set a reference point in Asset Verification to enable cadastre layer
+                    </div>
+                    
+                    <div style="margin-bottom: 0.75rem;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="cadastre-toggle" onchange="toggleCadastreLayer(this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span style="margin-left: 0.5rem; font-size: 0.85rem;">Enable Layer</span>
+                    </div>
+                    
+                    <div style="margin-bottom: 0.75rem;">
+                        <button class="tool-btn" style="width: 100%; font-size: 0.85em;" onclick="document.getElementById('cadastre-file-input').click()">
+                            📁 Upload GeoJSON
+                        </button>
+                        <input type="file" id="cadastre-file-input" accept=".geojson,.json" style="display: none;" onchange="handleCadastreFileUpload(event)">
+                        <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; line-height: 1.3;">
+                            <a href="https://qldspatial.information.qld.gov.au/catalogue/custom/search.page" target="_blank" style="color: var(--text-link);">Download from QLD Spatial Catalogue</a>
+                        </div>
+                    </div>
+                    
+                    <div id="cadastre-controls" style="display: none;">
+                        <div style="margin-bottom: 0.75rem;">
+                            <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">
+                                Opacity: <span id="cadastre-opacity-value">70%</span>
+                            </label>
+                            <input type="range" id="cadastre-opacity" min="0" max="1" step="0.05" value="0.7"
+                                   style="width: 100%;"
+                                   oninput="setCadastreOpacity(this.value)">
+                        </div>
+                        
+                        <div style="margin-bottom: 0.75rem;">
+                            <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">
+                                Line Color
+                            </label>
+                            <input type="color" id="cadastre-color" value="#FF0000"
+                                   style="width: 100%; height: 32px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;"
+                                   onchange="setCadastreColor(this.value)">
+                        </div>
+                        
+                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+                            Features: <span id="cadastre-feature-count">0</span>
+                        </div>
+                        
+                        <button class="tool-btn" style="width: 100%; font-size: 0.85em;" onclick="loadCadastreData()">
+                            🔄 Refresh Data
+                        </button>
+                        
+                        <div style="margin-top: 0.75rem; padding: 0.5rem; background: var(--bg-info-panel); border: 1px solid var(--border-info-panel); border-radius: 4px; font-size: 0.75rem;">
+                            <strong>💡 Tip:</strong> The cadastre layer is draggable. Click and drag it to align property boundaries with your engineering drawings.
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -938,6 +1098,50 @@
             <div style="margin-bottom: 1rem;">
                 <input type="text" id="asset-search" placeholder="Search assets..." style="width: 100%; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.4rem; border-radius: 4px;">
             </div>
+            
+            <!-- Cadastre Layer Panel -->
+            <div style="border-top: 1px solid var(--border-layer-group); padding-top: 1rem; margin-top: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <h4 style="margin: 0; font-size: 0.9rem;">Cadastre Layer</h4>
+                    <label class="toggle-switch" style="margin: 0;">
+                        <input type="checkbox" id="cadastre-toggle" onchange="toggleCadastreLayer(this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div id="cadastre-controls" style="display: none;">
+                    <div style="margin-bottom: 0.5rem;">
+                        <label style="font-size: 0.8rem; color: var(--text-muted);">Opacity</label>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <input type="range" id="cadastre-opacity-slider" min="0" max="1" step="0.1" value="0.5" 
+                                   style="flex: 1;" oninput="setCadastreOpacity(this.value)">
+                            <span id="cadastre-opacity-value" style="font-size: 0.8rem; min-width: 3ch;">50%</span>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 0.5rem;">
+                        <label style="font-size: 0.8rem; color: var(--text-muted);">Color</label>
+                        <input type="color" id="cadastre-color-picker" value="#FF0000" 
+                               style="width: 100%; height: 2rem; border: 1px solid var(--border-color); border-radius: 4px;"
+                               onchange="setCadastreColor(this.value)">
+                    </div>
+                    
+                    <button class="btn" style="width: 100%; padding: 0.4rem; font-size: 0.8rem;" 
+                            onclick="loadCadastreData()">
+                        ↻ Refresh Cadastre
+                    </button>
+                    
+                    <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.5rem; margin-bottom: 0;">
+                        Data from Queensland Digital Cadastral Database. 
+                        <span id="cadastre-feature-count"></span>
+                    </p>
+                </div>
+                
+                <div id="cadastre-no-ref" style="display: none; padding: 0.5rem; background: #fff3cd; border-radius: 4px; font-size: 0.8rem; margin-top: 0.5rem; color: #856404;">
+                    ⚠️ Set a reference point first (Asset Verification panel)
+                </div>
+            </div>
+
             <div id="asset-list" style="max-height: 500px; overflow-y: auto;"></div>
         </div>
     </div>
@@ -1079,7 +1283,10 @@
         asset_rotation: {{ project.asset_rotation }},
         ref_asset_id: '{{ project.ref_asset_id|escapejs }}',
         ref_pixel_x: {{ project.ref_pixel_x }},
-        ref_pixel_y: {{ project.ref_pixel_y }}
+        ref_pixel_y: {{ project.ref_pixel_y }},
+        cadastre_enabled: {{ project.cadastre_enabled|yesno:"true,false" }},
+        cadastre_opacity: {{ project.cadastre_opacity }},
+        cadastre_color: '{{ project.cadastre_color|escapejs }}'
     };
 </script>
 <script src="{% static 'js/canvas_editor.js' %}"></script>

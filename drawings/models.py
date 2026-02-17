@@ -34,6 +34,12 @@ class Project(models.Model):
     ref_pixel_x = models.FloatField(default=0.0, help_text="Pixel X where reference asset was placed on canvas")
     ref_pixel_y = models.FloatField(default=0.0, help_text="Pixel Y where reference asset was placed on canvas")
 
+    # Cadastre layer settings
+    cadastre_enabled = models.BooleanField(default=False, help_text="Enable Queensland cadastre boundary overlay")
+    cadastre_opacity = models.FloatField(default=0.5, help_text="Opacity of cadastre layer (0-1)")
+    cadastre_color = models.CharField(max_length=7, default='#FF0000', help_text="Hex color for cadastre boundaries")
+    cadastre_cache_timestamp = models.DateTimeField(null=True, blank=True, help_text="Last time cadastre data was fetched")
+
     class Meta:
         ordering = ['-created_at']
 

@@ -57,6 +57,14 @@ let measurePreviewLabel = null;  // Live distance label near cursor
 // PDF inversion state
 let isPdfInverted = false;
 
+// Cadastre layer state
+let cadastreFeatures = [];
+let cadastreLayerGroup = null;  // Fabric.js Group containing all cadastre lines
+let cadastreEnabled = false;
+let cadastreOpacity = 0.7;
+let cadastreColor = '#FF0000';
+let cadastreVisible = true;
+
 // Undo system
 const undoStack = [];
 const MAX_UNDO_STEPS = 50;
@@ -475,6 +483,8 @@ function setupCanvasEvents() {
             selectSheet(obj.sheetData.id);
         } else if (obj && obj.assetData) {
             selectAsset(obj.assetData.id);
+        } else if (obj && obj.cadastreLayer) {
+            selectCadastreLayer();
         }
     });
 
@@ -484,6 +494,8 @@ function setupCanvasEvents() {
             selectSheet(obj.sheetData.id);
         } else if (obj && obj.assetData) {
             selectAsset(obj.assetData.id);
+        } else if (obj && obj.cadastreLayer) {
+            selectCadastreLayer();
         }
     });
 
@@ -637,9 +649,335 @@ async function loadProjectData() {
         if (refAssetId && (refPixelX !== 0 || refPixelY !== 0)) {
             drawVerifyRefMarker(refPixelX, refPixelY);
         }
+        
+        // Load cadastre data if enabled
+        if (PROJECT_DATA.cadastre_enabled) {
+            cadastreEnabled = PROJECT_DATA.cadastre_enabled;
+            cadastreOpacity = PROJECT_DATA.cadastre_opacity || 0.5;
+            cadastreColor = PROJECT_DATA.cadastre_color || '#FF0000';
+            await loadCadastreData();
+        }
 
     } catch (error) {
         console.error('Error loading project data:', error);
+    }
+}
+
+// Cadastre Layer Functions
+async function handleCadastreFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (!refAssetId) {
+        alert('Please set a reference point first using the Asset Verification panel.');
+        event.target.value = ''; // Reset file input
+        return;
+    }
+    
+    try {
+        const text = await file.text();
+        const geojson = JSON.parse(text);
+        
+        // Validate GeoJSON structure
+        if (!geojson.features || !Array.isArray(geojson.features)) {
+            alert('Invalid GeoJSON file. Must contain a "features" array.');
+            event.target.value = '';
+            return;
+        }
+        
+        // Transform coordinates if needed
+        const response = await fetch(`/api/projects/${PROJECT_ID}/cadastre/upload/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify(geojson)
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            cadastreFeatures = data.features || [];
+            cadastreEnabled = true;
+            renderCadastreOnCanvas();
+            updateCadastreUI();
+            console.log(`Loaded ${cadastreFeatures.length} cadastre features from file`);
+            
+            // Update toggle
+            document.getElementById('cadastre-toggle').checked = true;
+        } else {
+            const error = await response.json();
+            alert('Failed to process cadastre file: ' + (error.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error loading cadastre file:', error);
+        alert('Error reading file: ' + error.message);
+    }
+    
+    // Reset file input so the same file can be selected again
+    event.target.value = '';
+}
+
+async function loadCadastreData() {
+    if (!cadastreEnabled && !PROJECT_DATA.cadastre_enabled) {
+        console.log('Cadastre layer disabled');
+        return;
+    }
+    
+    if (!refAssetId) {
+        console.log('No reference point set, cannot load cadastre data');
+        updateCadastreUI();
+        return;
+    }
+    
+    try {
+        const radius = 500; // meters
+        const response = await fetch(
+            `/api/projects/${PROJECT_ID}/cadastre/?radius=${radius}`
+        );
+        
+        if (response.ok) {
+            const data = await response.json();
+            cadastreFeatures = data.features || [];
+            renderCadastreOnCanvas();
+            updateCadastreUI();
+            console.log(`Loaded ${cadastreFeatures.length} cadastre features`);
+        } else {
+            const error = await response.json();
+            console.warn('Failed to load cadastre data:', error);
+            
+            // More helpful error message with file upload suggestion
+            const errorMsg = error.error || 'Unknown error';
+            alert(
+                `Failed to load cadastre data from Queensland API.\n\n` +
+                `Error: ${errorMsg}\n\n` +
+                `Alternative: Use the "Upload GeoJSON" button to load cadastre data from a file.\n` +
+                `Download cadastre data from: https://qldspatial.information.qld.gov.au/catalogue/`
+            );
+        }
+    } catch (error) {
+        console.error('Error loading cadastre data:', error);
+        alert(
+            `Failed to load cadastre data from Queensland API.\n\n` +
+            `Error: ${error.message}\n\n` +
+            `Alternative: Use the "Upload GeoJSON" button to load cadastre data from a file.\n` +
+            `Download cadastre data from: https://qldspatial.information.qld.gov.au/catalogue/`
+        );
+    }
+}
+
+function renderCadastreOnCanvas() {
+    // Remove existing cadastre layer group
+    clearCadastreLayer();
+    
+    if (!cadastreEnabled || cadastreFeatures.length === 0) {
+        return;
+    }
+    
+    // Collect all polylines before creating the group
+    const polylines = [];
+    
+    cadastreFeatures.forEach(feature => {
+        if (!feature.geometry) return;
+        
+        const geomType = feature.geometry.type;
+        
+        if (geomType === 'Polygon') {
+            const lines = createCadastrePolygon(feature.geometry.coordinates, feature.properties);
+            polylines.push(...lines);
+        } else if (geomType === 'MultiPolygon') {
+            feature.geometry.coordinates.forEach(polygon => {
+                const lines = createCadastrePolygon(polygon, feature.properties);
+                polylines.push(...lines);
+            });
+        }
+    });
+    
+    if (polylines.length === 0) {
+        return;
+    }
+    
+    // Create a group containing all cadastre lines
+    cadastreLayerGroup = new fabric.Group(polylines, {
+        selectable: true,
+        hasControls: true,
+        hasBorders: true,
+        lockScalingX: true,
+        lockScalingY: true,
+        lockRotation: false,  // Allow rotation
+        borderColor: '#00ff00',
+        borderScaleFactor: 2,
+        cornerColor: '#00ff00',
+        cornerSize: 12,
+        transparentCorners: false,
+        cadastreLayer: true,
+        name: 'Cadastre Layer'
+    });
+    
+    canvas.add(cadastreLayerGroup);
+    
+    // Position behind sheets but above background
+    cadastreLayerGroup.moveTo(1);
+    
+    // Update layer list
+    updateLayersList();
+    
+    canvas.requestRenderAll();
+    console.log(`Rendered cadastre layer with ${polylines.length} lines`);
+}
+
+function createCadastrePolygon(rings, properties) {
+    // rings[0] is the outer ring, rest are holes
+    if (!rings || !rings[0]) return [];
+    
+    const polylines = [];
+    
+    // Render outer ring
+    const outerRing = rings[0];
+    const points = outerRing.map(coord => ({
+        x: coord[0],
+        y: coord[1]
+    }));
+    
+    const polygon = new fabric.Polyline(points, {
+        fill: 'transparent',
+        stroke: cadastreColor,
+        strokeWidth: 2,
+        opacity: cadastreOpacity,
+        selectable: false,
+        evented: false,
+        cadastreFeature: true,
+        cadastreData: properties
+    });
+    
+    polylines.push(polygon);
+    
+    return polylines;
+}
+
+function clearCadastreLayer() {
+    if (cadastreLayerGroup) {
+        canvas.remove(cadastreLayerGroup);
+        cadastreLayerGroup = null;
+        updateLayersList();
+    }
+    canvas.requestRenderAll();
+}
+
+function toggleCadastreLayer(enabled) {
+    cadastreEnabled = enabled;
+    
+    if (enabled) {
+        if (!refAssetId) {
+            alert('Please set a reference point first using the Asset Verification panel.');
+            document.getElementById('cadastre-toggle').checked = false;
+            cadastreEnabled = false;
+            updateCadastreUI();
+            return;
+        }
+        
+        if (cadastreFeatures.length === 0) {
+            loadCadastreData();
+        } else {
+            renderCadastreOnCanvas();
+        }
+    } else {
+        clearCadastreLayer();
+    }
+    
+    updateCadastreUI();
+    saveCadastreSettings();
+}
+
+function setCadastreOpacity(opacity) {
+    cadastreOpacity = parseFloat(opacity);
+    
+    if (cadastreLayerGroup) {
+        // Update opacity of all objects in the group
+        cadastreLayerGroup.getObjects().forEach(obj => {
+            obj.set('opacity', cadastreOpacity);
+        });
+        canvas.requestRenderAll();
+    }
+    
+    // Update UI display
+    const pct = Math.round(cadastreOpacity * 100);
+    document.getElementById('cadastre-opacity-value').textContent = pct + '%';
+    
+    debouncedSaveCadastreSettings();
+}
+
+function setCadastreColor(color) {
+    cadastreColor = color;
+    
+    if (cadastreLayerGroup) {
+        // Update stroke color of all objects in the group
+        cadastreLayerGroup.getObjects().forEach(obj => {
+            obj.set('stroke', cadastreColor);
+        });
+        canvas.requestRenderAll();
+    }
+    
+    debouncedSaveCadastreSettings();
+}
+
+function toggleCadastreVisibility(visible) {
+    cadastreVisible = visible;
+    if (cadastreLayerGroup) {
+        cadastreLayerGroup.set('visible', visible);
+        canvas.requestRenderAll();
+    }
+}
+
+function updateCadastreUI() {
+    const toggle = document.getElementById('cadastre-toggle');
+    const controls = document.getElementById('cadastre-controls');
+    const noRef = document.getElementById('cadastre-no-ref');
+    const featureCount = document.getElementById('cadastre-feature-count');
+    
+    if (toggle) toggle.checked = cadastreEnabled;
+    
+    if (controls) {
+        controls.style.display = cadastreEnabled ? 'block' : 'none';
+    }
+    
+    if (noRef) {
+        noRef.style.display = (!refAssetId && cadastreEnabled) ? 'block' : 'none';
+    }
+    
+    if (featureCount && cadastreFeatures.length > 0) {
+        featureCount.textContent = `${cadastreFeatures.length} properties loaded.`;
+    }
+}
+
+let cadastreSettingsSaveTimeout = null;
+function debouncedSaveCadastreSettings() {
+    if (cadastreSettingsSaveTimeout) {
+        clearTimeout(cadastreSettingsSaveTimeout);
+    }
+    cadastreSettingsSaveTimeout = setTimeout(saveCadastreSettings, 500);
+}
+
+async function saveCadastreSettings() {
+    try {
+        const response = await fetch(`/api/projects/${PROJECT_ID}/cadastre/settings/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                cadastre_enabled: cadastreEnabled,
+                cadastre_opacity: cadastreOpacity,
+                cadastre_color: cadastreColor
+            })
+        });
+        
+        if (response.ok) {
+            console.log('Cadastre settings saved');
+        }
+    } catch (error) {
+        console.error('Error saving cadastre settings:', error);
     }
 }
 
@@ -674,6 +1012,12 @@ function renderSheetLayers() {
         });
         container.appendChild(div);
     });
+}
+
+function updateLayersList() {
+    // This function can be expanded in the future to update other layers
+    // Currently just ensures UI consistency
+    renderSheetLayers();
 }
 
 function renderAssetList() {
@@ -1238,6 +1582,34 @@ function selectAsset(assetId) {
     showTab('properties');
 }
 
+function selectCadastreLayer() {
+    selectedSheet = null;
+    selectedAsset = null;
+
+    // Clear sheet selection shadow
+    canvas.getObjects().forEach(obj => {
+        if (obj.sheetData) obj.shadow = null;
+    });
+
+    // Show a message in the properties panel
+    document.getElementById('no-selection').style.display = 'none';
+    document.getElementById('sheet-properties').style.display = 'none';
+    document.getElementById('asset-properties').style.display = 'none';
+    
+    // If there's a cadastre-properties panel, show it
+    const cadastreProps = document.getElementById('cadastre-properties');
+    if (cadastreProps) {
+        cadastreProps.style.display = 'block';
+    } else {
+        // Show a simple message in no-selection
+        const noSel = document.getElementById('no-selection');
+        noSel.style.display = 'block';
+        noSel.innerHTML = '<p style="text-align: center; color: var(--text-muted); padding: 1rem;">📍 <strong>Cadastre Layer Selected</strong><br><br>Drag to align property boundaries with your drawings.<br><br>Use the Cadastre Layer panel to adjust opacity and color.</p>';
+    }
+    
+    showTab('properties');
+}
+
 let _clearingSelection = false;
 function clearSelection() {
     // Guard against re-entrant calls (discardActiveObject fires selection:cleared)
@@ -1271,9 +1643,19 @@ function clearSelection() {
         item.classList.remove('selected');
     });
 
+    // Reset no-selection panel to default message
+    const noSel = document.getElementById('no-selection');
+    noSel.innerHTML = '<p style="text-align: center; color: var(--text-muted);">Select a sheet or asset to view properties</p>';
+    
     document.getElementById('no-selection').style.display = 'block';
     document.getElementById('sheet-properties').style.display = 'none';
     document.getElementById('asset-properties').style.display = 'none';
+    
+    const cadastreProps = document.getElementById('cadastre-properties');
+    if (cadastreProps) {
+        cadastreProps.style.display = 'none';
+    }
+    
     updateContextTools();
 }
 
@@ -1729,6 +2111,11 @@ async function applyVerification() {
     console.log('Asset verification applied: ref=' + refAssetId +
         ', pixel=(' + refPixelX.toFixed(0) + ',' + refPixelY.toFixed(0) + ')' +
         ', rotation=' + assetRotationDeg + '°');
+    
+    // Reload cadastre data with new reference point
+    if (cadastreEnabled) {
+        await loadCadastreData();
+    }
 }
 
 // Asset Position Updates

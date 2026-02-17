@@ -32,4 +32,9 @@ urlpatterns = [
 
     # Calibration
     path('projects/<int:pk>/calibrate/', api_views.calibrate_project, name='calibrate-project'),
+    
+    # Cadastre Layer
+    path('projects/<int:pk>/cadastre/', api_views.get_cadastre_data, name='cadastre-data'),
+    path('projects/<int:pk>/cadastre/upload/', api_views.upload_cadastre_file, name='cadastre-upload'),
+    path('projects/<int:pk>/cadastre/settings/', api_views.update_cadastre_settings, name='cadastre-settings'),
 ]

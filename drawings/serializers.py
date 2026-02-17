@@ -104,6 +104,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             'pixels_per_meter', 'scale_calibrated', 'coord_unit',
             'origin_x', 'origin_y', 'canvas_rotation',
             'asset_rotation', 'ref_asset_id', 'ref_pixel_x', 'ref_pixel_y',
+            'cadastre_enabled', 'cadastre_opacity', 'cadastre_color',
             'sheets', 'asset_count',
             'created_at', 'updated_at'
         ]

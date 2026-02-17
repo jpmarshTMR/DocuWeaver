@@ -12,8 +12,20 @@ A Django-based PDF alignment and asset overlay tool. Upload multi-page PDF drawi
 - **Reference Point Calibration** — Anchor assets to a known reference point for accurate placement
 - **Scale Calibration** — Set pixels-per-meter with a two-point measurement tool
 - **Custom Icons** — Upload custom marker icons per asset type
+- **Queensland Cadastre Layer** — Overlay property boundaries from QLD Spatial Services or uploaded GeoJSON files (🆕)
 - **Dark Mode** — Full light/dark theme support
 - **Export** — Export the composed canvas as a PDF
+
+### Queensland Cadastre Layer (New!)
+
+The cadastre layer feature allows you to overlay Queensland property boundaries on your engineering drawings:
+
+- **Interactive & Draggable** — Click and drag to align property boundaries with your drawings
+- **Two Loading Options** — Load from Queensland API or upload GeoJSON files
+- **Customizable** — Adjust opacity, color, and visibility
+- **Geo-referenced** — Automatic coordinate transformation from lat/lon to pixels
+
+📖 **[Full Cadastre Layer Documentation](docs/CADASTRE_LAYER.md)**
 
 ## Tech Stack
 

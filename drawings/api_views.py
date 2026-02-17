@@ -439,6 +439,146 @@ def calibrate_project(request, pk):
     })
 
 
+@api_view(['GET'])
+def get_cadastre_data(request, pk):
+    """Fetch cadastre boundaries for a project based on reference location."""
+    project = get_object_or_404(Project, pk=pk)
+    
+    # Check if reference point is set
+    if not project.ref_asset_id:
+        return Response({'error': 'Reference point not configured'}, status=400)
+    
+    # Get reference asset coordinates
+    ref_asset = project.assets.filter(asset_id=project.ref_asset_id).first()
+    if not ref_asset:
+        return Response({'error': 'Reference asset not found'}, status=404)
+    
+    # Fetch cadastre data from QLD API
+    try:
+        from .services.cadastre_service import fetch_cadastre_boundaries, transform_cadastre_to_project_coords
+        from datetime import datetime
+        
+        radius_meters = int(request.query_params.get('radius', 500))
+        
+        # Fetch from API
+        cadastre_data = fetch_cadastre_boundaries(
+            ref_asset.current_y,  # latitude
+            ref_asset.current_x,  # longitude
+            radius_meters
+        )
+        
+        if not cadastre_data:
+            return Response({'error': 'Failed to fetch cadastre data from Queensland API'}, status=503)
+        
+        # Transform to project coordinates
+        transformed_features = transform_cadastre_to_project_coords(
+            cadastre_data, project
+        )
+        
+        # Update cache timestamp
+        project.cadastre_cache_timestamp = datetime.now()
+        project.save(update_fields=['cadastre_cache_timestamp'])
+        
+        logger.info(f"Fetched {len(transformed_features)} cadastre features for project {pk}")
+        
+        return Response({
+            'features': transformed_features,
+            'reference_point': {
+                'lat': ref_asset.current_y,
+                'lon': ref_asset.current_x
+            },
+            'feature_count': len(transformed_features)
+        })
+    except Exception as e:
+        logger.error(f"Failed to fetch cadastre data for project {pk}: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+def update_cadastre_settings(request, pk):
+    """Update cadastre layer settings for a project."""
+    project = get_object_or_404(Project, pk=pk)
+    
+    updated_fields = []
+    
+    if 'cadastre_enabled' in request.data:
+        project.cadastre_enabled = bool(request.data['cadastre_enabled'])
+        updated_fields.append('cadastre_enabled')
+    
+    if 'cadastre_opacity' in request.data:
+        try:
+            opacity = float(request.data['cadastre_opacity'])
+            if 0 <= opacity <= 1:
+                project.cadastre_opacity = opacity
+                updated_fields.append('cadastre_opacity')
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid cadastre_opacity value'}, status=400)
+    
+    if 'cadastre_color' in request.data:
+        color = str(request.data['cadastre_color'])
+        # Basic hex color validation
+        if color.startswith('#') and len(color) == 7:
+            project.cadastre_color = color
+            updated_fields.append('cadastre_color')
+        else:
+            return Response({'error': 'Invalid cadastre_color format (use #RRGGBB)'}, status=400)
+    
+    if updated_fields:
+        project.save(update_fields=updated_fields)
+        logger.info(f"Updated cadastre settings for project {pk}: {updated_fields}")
+    
+    return Response({
+        'cadastre_enabled': project.cadastre_enabled,
+        'cadastre_opacity': project.cadastre_opacity,
+        'cadastre_color': project.cadastre_color
+    })
+
+
+@api_view(['POST'])
+def upload_cadastre_file(request, pk):
+    """Upload and process a cadastre GeoJSON file for a project."""
+    project = get_object_or_404(Project, pk=pk)
+    
+    # Check if reference point is set
+    if not project.ref_asset_id:
+        return Response({'error': 'Reference point not configured'}, status=400)
+    
+    try:
+        from .services.cadastre_service import transform_cadastre_to_project_coords
+        from datetime import datetime
+        
+        # Get GeoJSON data from request body
+        geojson_data = request.data
+        
+        # Validate GeoJSON structure
+        if not isinstance(geojson_data, dict) or 'features' not in geojson_data:
+            return Response({'error': 'Invalid GeoJSON format. Must contain "features" array.'}, status=400)
+        
+        if not isinstance(geojson_data['features'], list):
+            return Response({'error': 'GeoJSON "features" must be an array.'}, status=400)
+        
+        # Transform to project coordinates
+        transformed_features = transform_cadastre_to_project_coords(
+            geojson_data, project
+        )
+        
+        # Update cache timestamp
+        project.cadastre_cache_timestamp = datetime.now()
+        project.cadastre_enabled = True
+        project.save(update_fields=['cadastre_cache_timestamp', 'cadastre_enabled'])
+        
+        logger.info(f"Uploaded {len(transformed_features)} cadastre features for project {pk}")
+        
+        return Response({
+            'features': transformed_features,
+            'feature_count': len(transformed_features),
+            'message': f'Successfully loaded {len(transformed_features)} cadastre features'
+        })
+    except Exception as e:
+        logger.error(f"Failed to process cadastre file for project {pk}: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
 @api_view(['POST'])
 def split_sheet(request, pk):
     """Split a sheet into two independent pieces along a line."""
