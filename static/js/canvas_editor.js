@@ -214,7 +214,13 @@ async function undoClearCut(data) {
 // Initialize canvas
 document.addEventListener('DOMContentLoaded', function() {
     initCanvas();
-    loadProjectData();
+    loadProjectData().then(() => {
+        // Restore viewport state after project data is loaded
+        // Use a timeout to ensure canvas is fully rendered
+        setTimeout(() => {
+            restoreViewportState();
+        }, 200);
+    });
 
     // Initialize viewport rotation from project data
     if (PROJECT_DATA.canvas_rotation) {
@@ -336,6 +342,7 @@ function setupCanvasEvents() {
             canvas.requestRenderAll();
             lastPosX = evt.clientX;
             lastPosY = evt.clientY;
+            debouncedSaveViewportState();
         }
 
         // Handle crop drag
@@ -408,6 +415,7 @@ function setupCanvasEvents() {
         opt.e.stopPropagation();
 
         updateZoomDisplay();
+        debouncedSaveViewportState();
     });
 
     canvas.on('object:moving', function(opt) {
@@ -2372,6 +2380,7 @@ function bringToScale() {
 
     applyViewportRotation();
     updateZoomDisplay();
+    debouncedSaveViewportState();
 
     console.log('Brought to scale: zoom =', zoom.toFixed(2));
 }
@@ -2381,12 +2390,95 @@ function resetView() {
     canvas.absolutePan({ x: 0, y: 0 });
     applyViewportRotation();  // Re-apply rotation after pan
     updateZoomDisplay();
+    debouncedSaveViewportState();
 }
 
 function updateZoomDisplay() {
     const zoom = Math.round(currentZoomLevel * 100);
     document.getElementById('zoom-level').textContent = zoom;
     document.getElementById('zoom-display').textContent = zoom + '%';
+}
+
+// Viewport State Persistence Functions
+let viewportSaveTimeout = null;
+
+/**
+ * Save the current viewport state (zoom and pan) to localStorage
+ */
+function saveViewportState() {
+    if (!canvas || typeof PROJECT_ID === 'undefined') return;
+    
+    const vpt = canvas.viewportTransform;
+    const state = {
+        zoom: currentZoomLevel,
+        panX: vpt[4],
+        panY: vpt[5]
+    };
+    
+    const key = `docuweaver-viewport-${PROJECT_ID}`;
+    localStorage.setItem(key, JSON.stringify(state));
+    console.log('Saved viewport state:', state);
+}
+
+/**
+ * Restore the saved viewport state (zoom and pan) from localStorage
+ */
+function restoreViewportState() {
+    if (!canvas || typeof PROJECT_ID === 'undefined') {
+        console.log('Cannot restore viewport: canvas or PROJECT_ID not available');
+        return;
+    }
+    
+    const key = `docuweaver-viewport-${PROJECT_ID}`;
+    const saved = localStorage.getItem(key);
+    
+    console.log('Attempting to restore viewport for project:', PROJECT_ID);
+    console.log('Saved state:', saved);
+    
+    if (saved) {
+        try {
+            const state = JSON.parse(saved);
+            if (state.zoom && state.panX !== undefined && state.panY !== undefined) {
+                currentZoomLevel = state.zoom;
+                
+                // Apply the saved viewport transform
+                const angleRad = viewportRotation * Math.PI / 180;
+                const cos = Math.cos(angleRad);
+                const sin = Math.sin(angleRad);
+                
+                const vpt = canvas.viewportTransform;
+                vpt[0] = cos * currentZoomLevel;
+                vpt[1] = sin * currentZoomLevel;
+                vpt[2] = -sin * currentZoomLevel;
+                vpt[3] = cos * currentZoomLevel;
+                vpt[4] = state.panX;
+                vpt[5] = state.panY;
+                
+                canvas.setViewportTransform(vpt);
+                canvas.forEachObject(function(obj) { obj.setCoords(); });
+                canvas.requestRenderAll();
+                updateZoomDisplay();
+                
+                console.log('Successfully restored viewport state:', state);
+            } else {
+                console.log('Invalid state structure:', state);
+            }
+        } catch (e) {
+            console.error('Failed to restore viewport state:', e);
+        }
+    } else {
+        console.log('No saved viewport state found for project:', PROJECT_ID);
+    }
+}
+
+/**
+ * Debounced save to avoid excessive localStorage writes
+ */
+function debouncedSaveViewportState() {
+    if (viewportSaveTimeout) {
+        clearTimeout(viewportSaveTimeout);
+    }
+    viewportSaveTimeout = setTimeout(saveViewportState, 300);
 }
 
 // Viewport Rotation Functions
