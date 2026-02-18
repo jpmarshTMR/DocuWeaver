@@ -861,15 +861,6 @@ async function loadProjectData() {
             sheetGroups = await sheetGroupsResponse.json();
         }
 
-        console.log('Loaded data:', {
-            sheets: sheets.length,
-            assets: assets.length,
-            links: links.length,
-            assetGroups: assetGroups.length,
-            linkGroups: linkGroups.length,
-            sheetGroups: sheetGroups.length
-        });
-
         // Initialize visibility from loaded group data
         [...assetGroups, ...linkGroups, ...sheetGroups].forEach(g => {
             groupVisibility[g.id] = g.visible;
@@ -2067,17 +2058,8 @@ function renderLinksOnCanvas() {
     const existingLinks = canvas.getObjects().filter(obj => obj.isLinkObject);
     existingLinks.forEach(obj => canvas.remove(obj));
 
-    console.log('renderLinksOnCanvas called:', {
-        refAssetId: refAssetId,
-        refPixelX: refPixelX,
-        refPixelY: refPixelY,
-        linksVisible: linksVisible,
-        linksCount: links.length
-    });
-
     // Only render links if a reference point has been placed
     if (!refAssetId || (refPixelX === 0 && refPixelY === 0)) {
-        console.log('Skipping link render - no reference point');
         return;
     }
 
@@ -2087,17 +2069,13 @@ function renderLinksOnCanvas() {
         return;
     }
 
-    let rendered = 0, skippedGroup = 0, skippedCoords = 0;
-    
     links.forEach(link => {
         // Check if link's group is visible
         if (link.layer_group && groupVisibility[link.layer_group] === false) {
-            skippedGroup++;
             return;  // Skip hidden group links
         }
 
         if (!link.coordinates || link.coordinates.length < 2) {
-            skippedCoords++;
             return;
         }
 
@@ -2121,7 +2099,6 @@ function renderLinksOnCanvas() {
         });
 
         canvas.add(polyline);
-        rendered++;
     });
 
     // Position all links above sheets and OSM tiles but below assets
@@ -2140,7 +2117,6 @@ function renderLinksOnCanvas() {
         canvas.moveTo(linkObj, insertIndex);
     });
 
-    console.log('Links render result:', { rendered, skippedGroup, skippedCoords, total: links.length });
     canvas.renderAll();
 }
 
