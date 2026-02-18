@@ -647,6 +647,7 @@ async function loadProjectData() {
         renderLinksOnCanvas();
         renderLinkList();
         renderImportBatches();
+        renderLinkImportBatches();
 
         // Load layer groups and measurement sets
         await loadLayerGroups();
@@ -3988,7 +3989,10 @@ async function renderImportBatches() {
     try {
         const resp = await fetch(`/api/projects/${PROJECT_ID}/import-batches/`);
         if (!resp.ok) return;
-        const batches = await resp.json();
+        const allBatches = await resp.json();
+        
+        // Filter out link batches (those with filenames starting with "links:")
+        const batches = allBatches.filter(b => !b.filename.startsWith('links:'));
 
         container.innerHTML = '';
         if (batches.length === 0) return;
@@ -4043,6 +4047,108 @@ async function renderImportBatches() {
     } catch (err) {
         console.error('Error loading import batches:', err);
     }
+}
+
+/**
+ * Render link import batches in the Links section
+ */
+async function renderLinkImportBatches() {
+    const container = document.getElementById('link-import-batches');
+    if (!container) return;
+
+    try {
+        const resp = await fetch(`/api/projects/${PROJECT_ID}/import-batches/`);
+        if (!resp.ok) return;
+        const allBatches = await resp.json();
+        
+        // Filter to only link batches (those with filenames starting with "links:")
+        const batches = allBatches.filter(b => b.filename.startsWith('links:'));
+
+        container.innerHTML = '';
+        if (batches.length === 0) return;
+
+        batches.forEach(batch => {
+            const div = document.createElement('div');
+            div.className = 'batch-item';
+
+            const header = document.createElement('div');
+            header.className = 'batch-header';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'batch-name';
+            // Remove the "links:" prefix for display
+            const displayName = batch.filename.replace(/^links:/, '');
+            nameSpan.textContent = displayName;
+            nameSpan.title = displayName;
+
+            const countSpan = document.createElement('span');
+            countSpan.className = 'batch-count';
+            countSpan.textContent = `${batch.asset_count}`;
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'batch-delete-btn';
+            delBtn.textContent = '\u00D7';
+            delBtn.title = 'Delete this batch and its links';
+            delBtn.addEventListener('click', () => deleteLinkImportBatch(batch.id, displayName));
+
+            const visCheckbox = document.createElement('input');
+            visCheckbox.type = 'checkbox';
+            visCheckbox.className = 'batch-visibility';
+            visCheckbox.checked = true;
+            visCheckbox.title = 'Toggle batch visibility';
+            visCheckbox.style.marginRight = '0.3rem';
+            visCheckbox.addEventListener('change', function() {
+                toggleLinkBatchVisibility(batch.id, this.checked);
+            });
+
+            header.appendChild(visCheckbox);
+            header.appendChild(nameSpan);
+            header.appendChild(countSpan);
+            header.appendChild(delBtn);
+            div.appendChild(header);
+            container.appendChild(div);
+        });
+    } catch (err) {
+        console.error('Error loading link import batches:', err);
+    }
+}
+
+/**
+ * Delete a link import batch and its associated links
+ */
+async function deleteLinkImportBatch(batchId, filename) {
+    if (!confirm(`Delete batch "${filename}" and all its links?`)) return;
+
+    try {
+        const resp = await fetch(`/api/import-batches/${batchId}/`, {
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': getCSRFToken() }
+        });
+
+        if (resp.ok) {
+            await loadProjectData();
+        } else {
+            alert('Failed to delete batch');
+        }
+    } catch (err) {
+        console.error('Error deleting link batch:', err);
+    }
+}
+
+/**
+ * Toggle visibility for links in a batch
+ */
+function toggleLinkBatchVisibility(batchId, visible) {
+    // Filter links by import_batch and toggle visibility
+    links.forEach(link => {
+        if (link.import_batch === batchId) {
+            const fabricObj = canvas.getObjects().find(o => o.linkId === link.id);
+            if (fabricObj) {
+                fabricObj.visible = visible;
+            }
+        }
+    });
+    canvas.requestRenderAll();
 }
 
 function showBatchTypeSelect(batchDiv, batchId) {
