@@ -2,6 +2,7 @@
 import os
 import json
 import zipfile
+import logging
 from io import BytesIO
 from django.shortcuts import render, get_object_or_404
 from django.http import HttpResponse, JsonResponse
@@ -13,6 +14,9 @@ from .models import (
     Project, Sheet, JoinMark, AssetType, ImportBatch, Asset,
     Link, LayerGroup, MeasurementSet
 )
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 def project_list(request):
@@ -60,6 +64,10 @@ def export_project(request, pk):
             'ref_pixel_x': project.ref_pixel_x,
             'ref_pixel_y': project.ref_pixel_y,
             'cadastre_color': project.cadastre_color,
+            'cadastre_enabled': project.cadastre_enabled,
+            'osm_enabled': project.osm_enabled,
+            'osm_opacity': project.osm_opacity,
+            'osm_z_index': project.osm_z_index,
         }
         
         # Export sheets
@@ -79,6 +87,7 @@ def export_project(request, pk):
                 'image_width': sheet.image_width,
                 'image_height': sheet.image_height,
                 'layer_group_name': sheet.layer_group.name if sheet.layer_group else None,
+                'crop_flipped': sheet.crop_flipped,
             }
             
             # Track PDF file
@@ -228,26 +237,41 @@ def export_project(request, pk):
 @require_POST
 def import_project(request):
     """Import a project from an uploaded ZIP file."""
+    logger.info("="*80)
+    logger.info("Starting project import")
+    
     if 'file' not in request.FILES:
+        logger.error("No file uploaded in request")
         return JsonResponse({'error': 'No file uploaded'}, status=400)
     
     uploaded_file = request.FILES['file']
+    logger.info(f"Uploaded file: {uploaded_file.name} ({uploaded_file.size} bytes)")
     
     if not uploaded_file.name.endswith('.docuweaver'):
+        logger.error(f"Invalid file type: {uploaded_file.name}")
         return JsonResponse({'error': 'Invalid file type. Please upload a .docuweaver file'}, status=400)
     
     try:
         with zipfile.ZipFile(uploaded_file, 'r') as zf:
+            logger.info(f"ZIP file opened successfully. Contents: {zf.namelist()}")
+            
             # Read project data
             try:
                 project_json = zf.read('project.json')
                 data = json.loads(project_json)
-            except KeyError:
+                logger.info(f"Parsed project.json. Version: {data.get('version', 'unknown')}")
+                logger.debug(f"Project data keys: {list(data.keys())}")
+            except KeyError as e:
+                logger.error(f"Missing project.json in ZIP file: {e}")
                 return JsonResponse({'error': 'Invalid project file: missing project.json'}, status=400)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse project.json: {e}")
+                return JsonResponse({'error': f'Invalid JSON in project.json: {e}'}, status=400)
             
             with transaction.atomic():
                 # Create project
                 project_data = data['project']
+                logger.info(f"Creating project: {project_data.get('name', 'Unknown')}")
                 
                 # Check for duplicate name and modify if needed
                 base_name = project_data['name']
@@ -257,6 +281,10 @@ def import_project(request):
                     name = f"{base_name} ({counter})"
                     counter += 1
                 
+                if name != base_name:
+                    logger.info(f"Project name changed to avoid duplicate: {base_name} -> {name}")
+                
+                logger.debug(f"Creating Project with data: {project_data}")
                 project = Project.objects.create(
                     name=name,
                     description=project_data.get('description', ''),
@@ -271,6 +299,10 @@ def import_project(request):
                     ref_pixel_x=project_data.get('ref_pixel_x', 0.0),
                     ref_pixel_y=project_data.get('ref_pixel_y', 0.0),
                     cadastre_color=project_data.get('cadastre_color', '#FF6600'),
+                    cadastre_enabled=project_data.get('cadastre_enabled', False),
+                    osm_enabled=project_data.get('osm_enabled', False),
+                    osm_opacity=project_data.get('osm_opacity', 0.7),
+                    osm_z_index=project_data.get('osm_z_index', 0),
                 )
                 
                 # Create or get asset types
@@ -316,6 +348,7 @@ def import_project(request):
                 
                 # Create import batches
                 batch_map = {}
+                logger.info(f"Creating {len(data.get('import_batches', []))} import batches")
                 for b_data in data.get('import_batches', []):
                     batch = ImportBatch.objects.create(
                         project=project,
@@ -323,14 +356,21 @@ def import_project(request):
                         asset_count=b_data.get('asset_count', 0),
                     )
                     batch_map[b_data['id']] = batch
+                    logger.debug(f"Created import batch: {batch.filename}")
                 
                 # Create sheets
-                for s_data in data.get('sheets', []):
+                sheets_data = data.get('sheets', [])
+                logger.info(f"Creating {len(sheets_data)} sheets")
+                for idx, s_data in enumerate(sheets_data):
+                    logger.debug(f"Creating sheet {idx+1}/{len(sheets_data)}: {s_data.get('name', 'Unknown')}")
+                    logger.debug(f"Sheet data keys: {list(s_data.keys())}")
+                    
                     sheet = Sheet(
                         project=project,
                         name=s_data['name'],
                         page_number=s_data.get('page_number', 1),
                         cuts_json=s_data.get('cuts_json', []),
+                        crop_flipped=s_data.get('crop_flipped', False),
                         offset_x=s_data.get('offset_x', 0.0),
                         offset_y=s_data.get('offset_y', 0.0),
                         rotation=s_data.get('rotation', 0.0),
@@ -392,7 +432,9 @@ def import_project(request):
                     )
                 
                 # Create links
-                for l_data in data.get('links', []):
+                links_data = data.get('links', [])
+                logger.info(f"Creating {len(links_data)} links")
+                for l_data in links_data:
                     Link.objects.create(
                         project=project,
                         import_batch=batch_map.get(l_data.get('import_batch_id')),
@@ -406,9 +448,12 @@ def import_project(request):
                         link_type=l_data.get('link_type', 'other'),
                         metadata=l_data.get('metadata', {}),
                     )
+                logger.debug(f"Created {len(links_data)} links")
                 
                 # Create measurement sets
-                for ms_data in data.get('measurement_sets', []):
+                ms_data_list = data.get('measurement_sets', [])
+                logger.info(f"Creating {len(ms_data_list)} measurement sets")
+                for ms_data in ms_data_list:
                     MeasurementSet.objects.create(
                         project=project,
                         name=ms_data['name'],
@@ -420,15 +465,24 @@ def import_project(request):
                         total_distance_meters=ms_data.get('total_distance_meters'),
                     )
                 
+                logger.info(f"Project '{project.name}' (ID: {project.id}) imported successfully")
+                logger.info("="*80)
+                
                 return JsonResponse({
                     'status': 'success',
                     'project_id': project.id,
                     'project_name': project.name,
                 })
     
-    except zipfile.BadZipFile:
+    except zipfile.BadZipFile as e:
+        logger.error(f"Invalid ZIP file: {e}")
+        logger.exception("ZIP file error details:")
         return JsonResponse({'error': 'Invalid ZIP file'}, status=400)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON data in project file: {e}")
+        logger.exception("JSON decode error details:")
         return JsonResponse({'error': 'Invalid JSON data in project file'}, status=400)
     except Exception as e:
+        logger.error(f"Import failed with exception: {e}")
+        logger.exception("Full traceback:")
         return JsonResponse({'error': f'Import failed: {str(e)}'}, status=500)
