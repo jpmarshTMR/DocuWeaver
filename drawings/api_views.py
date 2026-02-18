@@ -423,6 +423,30 @@ def calibrate_project(request, pk):
         else:
             return Response({'error': f'coord_unit must be one of: {", ".join(valid_units)}'}, status=400)
 
+    # OpenStreetMap layer settings
+    osm_enabled = request.data.get('osm_enabled')
+    if osm_enabled is not None:
+        project.osm_enabled = bool(osm_enabled)
+    
+    osm_opacity = request.data.get('osm_opacity')
+    if osm_opacity is not None:
+        try:
+            opacity = _parse_finite_float(osm_opacity, 'osm_opacity')
+            if 0.0 <= opacity <= 1.0:
+                project.osm_opacity = opacity
+            else:
+                return Response({'error': 'osm_opacity must be between 0.0 and 1.0'}, status=400)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+    
+    osm_z_index = request.data.get('osm_z_index')
+    if osm_z_index is not None:
+        try:
+            z_idx = int(osm_z_index)
+            project.osm_z_index = z_idx
+        except (ValueError, TypeError):
+            return Response({'error': 'osm_z_index must be an integer'}, status=400)
+
     project.save()
 
     return Response({
@@ -436,6 +460,9 @@ def calibrate_project(request, pk):
         'ref_asset_id': project.ref_asset_id,
         'ref_pixel_x': project.ref_pixel_x,
         'ref_pixel_y': project.ref_pixel_y,
+        'osm_enabled': project.osm_enabled,
+        'osm_opacity': project.osm_opacity,
+        'osm_z_index': project.osm_z_index,
     })
 
 

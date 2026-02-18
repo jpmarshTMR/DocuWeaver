@@ -36,6 +36,12 @@ class Project(models.Model):
 
     # Cadastre overlay settings
     cadastre_color = models.CharField(max_length=7, default='#FF6600', help_text="Color for cadastre boundaries")
+    cadastre_enabled = models.BooleanField(default=False, help_text="Enable cadastre overlay layer")
+
+    # OpenStreetMap overlay settings
+    osm_enabled = models.BooleanField(default=False, help_text="Enable OpenStreetMap tile layer")
+    osm_opacity = models.FloatField(default=0.7, help_text="Opacity of OSM layer (0.0 to 1.0)")
+    osm_z_index = models.IntegerField(default=0, help_text="Z-index for OSM layer ordering (0=bottom, higher=top)")
 
     class Meta:
         ordering = ['-created_at']
@@ -71,6 +77,9 @@ class Sheet(models.Model):
     # Cut lines (array of {p1: {x, y}, p2: {x, y}, flipped: bool})
     cuts_json = models.JSONField(default=list, blank=True,
         help_text="Array of cut definitions: [{p1: {x, y}, p2: {x, y}, flipped: bool}, ...]")
+
+    # Crop/cut state
+    crop_flipped = models.BooleanField(default=False, help_text="Whether the crop is flipped")
 
     # Position offset for alignment
     offset_x = models.FloatField(default=0.0, help_text="X offset in pixels")
