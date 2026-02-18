@@ -676,6 +676,42 @@ def move_item_to_group(request, pk):
         return Response({'error': 'item_type must be "asset" or "link"'}, status=400)
 
 
+@api_view(['POST'])
+def assign_ungrouped_to_group(request, pk):
+    """Assign all ungrouped items of a type to this group."""
+    group = get_object_or_404(LayerGroup, pk=pk)
+    item_type = request.data.get('item_type')  # 'asset' or 'link'
+
+    if not item_type:
+        return Response({'error': 'item_type is required'}, status=400)
+
+    if item_type == 'asset':
+        if group.group_type != 'asset':
+            return Response({'error': 'Cannot assign assets to a link group'}, status=400)
+        count = Asset.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
+        return Response({'status': 'assigned', 'count': count, 'item_type': 'asset'})
+    elif item_type == 'link':
+        if group.group_type != 'link':
+            return Response({'error': 'Cannot assign links to an asset group'}, status=400)
+        count = Link.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
+        return Response({'status': 'assigned', 'count': count, 'item_type': 'link'})
+    else:
+        return Response({'error': 'item_type must be "asset" or "link"'}, status=400)
+
+
+@api_view(['POST'])
+def ungroup_all_items(request, pk):
+    """Remove all items from a group (make them ungrouped)."""
+    group = get_object_or_404(LayerGroup, pk=pk)
+
+    if group.group_type == 'asset':
+        count = Asset.objects.filter(layer_group=group).update(layer_group=None)
+    else:
+        count = Link.objects.filter(layer_group=group).update(layer_group=None)
+
+    return Response({'status': 'ungrouped', 'count': count})
+
+
 # ============================================================================
 # Measurement Set Views
 # ============================================================================

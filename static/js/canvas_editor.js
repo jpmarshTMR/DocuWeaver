@@ -697,110 +697,82 @@ function renderSheetLayers() {
 }
 
 function renderAssetList() {
-    const container = document.getElementById('asset-list');
-    container.innerHTML = '';
-
-    assets.forEach(asset => {
-        const div = document.createElement('div');
-        div.className = 'asset-item' + (asset.is_adjusted ? ' adjusted' : '');
-
-        // Make draggable for group assignment
-        div.draggable = true;
-        div.dataset.assetId = asset.id;
-        div.addEventListener('dragstart', (e) => {
-            draggedItem = { type: 'asset', id: asset.id };
-            div.classList.add('dragging');
+    // Assets are now rendered inside folders by renderAssetGroupList()
+    // This function now just sets up search handlers
+    
+    // Setup search filter (left sidebar)
+    const assetSearchLeft = document.getElementById('asset-search-left');
+    if (assetSearchLeft) {
+        // Remove old listener to avoid duplicates
+        const newSearch = assetSearchLeft.cloneNode(true);
+        assetSearchLeft.parentNode.replaceChild(newSearch, assetSearchLeft);
+        newSearch.addEventListener('input', function(e) {
+            filterFolderItems(e.target.value, 'asset');
         });
-        div.addEventListener('dragend', (e) => {
-            div.classList.remove('dragging');
-            draggedItem = null;
-        });
+    }
 
-        // Delete button
-        const delBtn = document.createElement('button');
-        delBtn.className = 'asset-delete-btn';
-        delBtn.textContent = '\u00D7';
-        delBtn.title = 'Delete asset';
-        delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteAsset(asset.id, asset.asset_id); });
-        div.appendChild(delBtn);
-
-        // Security: Use DOM methods instead of innerHTML to prevent XSS
-        const strong = document.createElement('strong');
-        strong.textContent = asset.asset_id;  // Safe: textContent escapes HTML
-        div.appendChild(strong);
-
-        // Group badge if assigned
-        if (asset.layer_group_name) {
-            const groupBadge = document.createElement('span');
-            groupBadge.className = 'badge bg-info ms-1';
-            groupBadge.style.fontSize = '0.65em';
-            groupBadge.textContent = asset.layer_group_name;
-            groupBadge.title = 'Layer Group';
-            div.appendChild(groupBadge);
-        }
-
-        if (asset.name) {
-            div.appendChild(document.createElement('br'));
-            const small = document.createElement('small');
-            small.textContent = asset.name;  // Safe: textContent escapes HTML
-            div.appendChild(small);
-        }
-
-        const coordsDiv = document.createElement('div');
-        coordsDiv.className = 'coordinates';
-        coordsDiv.textContent = `X: ${asset.current_x.toFixed(2)}m, Y: ${asset.current_y.toFixed(2)}m`;
-        div.appendChild(coordsDiv);
-
-        div.addEventListener('click', () => selectAsset(asset.id));
-        container.appendChild(div);
-    });
-
-    // Setup search filters (right sidebar)
-    document.getElementById('asset-search').addEventListener('input', function(e) {
-        filterAssetList(e.target.value);
-        // Sync to left sidebar search
-        document.getElementById('asset-search-left').value = e.target.value;
-    });
-
-    // Left sidebar search
-    document.getElementById('asset-search-left').addEventListener('input', function(e) {
-        const query = e.target.value;
-        document.getElementById('asset-search').value = query;
-        filterAssetList(query);
-        if (query) showTab('assets');  // Auto-switch to assets tab
-    });
-
-    // Link search (right sidebar)
+    // Link search (left sidebar)
     const linkSearchEl = document.getElementById('link-search');
     if (linkSearchEl) {
-        linkSearchEl.addEventListener('input', function(e) {
-            filterLinkList(e.target.value);
+        // Remove old listener to avoid duplicates
+        const newLinkSearch = linkSearchEl.cloneNode(true);
+        linkSearchEl.parentNode.replaceChild(newLinkSearch, linkSearchEl);
+        newLinkSearch.addEventListener('input', function(e) {
+            filterFolderItems(e.target.value, 'link');
         });
     }
 }
 
-function filterAssetList(query) {
+function filterFolderItems(query, type) {
     const q = (query || '').toLowerCase();
-    document.querySelectorAll('.asset-item').forEach((item, index) => {
-        const asset = assets[index];
-        if (!asset) return;
-        const matches = !q || asset.asset_id.toLowerCase().includes(q) ||
-                      (asset.name && asset.name.toLowerCase().includes(q));
-        item.style.display = matches ? '' : 'none';
+    const container = type === 'asset' ? document.getElementById('asset-groups-list') : document.getElementById('link-groups-list');
+    if (!container) return;
+
+    // Filter items inside folders
+    container.querySelectorAll('.folder-item-entry').forEach((item) => {
+        const itemId = item.dataset.itemId;
+        const itemType = item.dataset.itemType;
+        if (itemType !== type) return;
+
+        let itemData;
+        if (type === 'asset') {
+            itemData = assets.find(a => a.id == itemId);
+            if (!itemData) return;
+            const matches = !q || 
+                (itemData.asset_id && itemData.asset_id.toLowerCase().includes(q)) ||
+                (itemData.name && itemData.name.toLowerCase().includes(q));
+            item.style.display = matches ? '' : 'none';
+        } else {
+            itemData = links.find(l => l.id == itemId);
+            if (!itemData) return;
+            const matches = !q || 
+                (itemData.link_id && itemData.link_id.toLowerCase().includes(q)) ||
+                (itemData.name && itemData.name.toLowerCase().includes(q)) ||
+                (itemData.link_type && itemData.link_type.toLowerCase().includes(q));
+            item.style.display = matches ? '' : 'none';
+        }
+    });
+
+    // Show/hide folders based on whether they have visible items
+    container.querySelectorAll('.folder-item, .ungrouped-folder').forEach((folder) => {
+        const visibleItems = folder.querySelectorAll('.folder-item-entry:not([style*="display: none"])');
+        const childFolders = folder.querySelectorAll('.folder-item');
+        // Show folder if it has visible items or visible child folders
+        if (q && visibleItems.length === 0 && childFolders.length === 0) {
+            folder.style.display = 'none';
+        } else {
+            folder.style.display = '';
+        }
     });
 }
 
+// Legacy filter functions for backwards compatibility
+function filterAssetList(query) {
+    filterFolderItems(query, 'asset');
+}
+
 function filterLinkList(query) {
-    const q = (query || '').toLowerCase();
-    document.querySelectorAll('.link-item').forEach((item) => {
-        const linkId = item.dataset.linkId;
-        const link = links.find(l => l.id == linkId);
-        if (!link) return;
-        const matches = !q || (link.link_id && link.link_id.toLowerCase().includes(q)) ||
-                      (link.name && link.name.toLowerCase().includes(q)) ||
-                      (link.link_type && link.link_type.toLowerCase().includes(q));
-        item.style.display = matches ? '' : 'none';
-    });
+    filterFolderItems(query, 'link');
 }
 
 function renderSheetsOnCanvas() {
@@ -1241,81 +1213,11 @@ function renderLinksOnCanvas() {
 
 /**
  * Render the link list in the sidebar panel.
+ * Links are now rendered inside folders by renderLinkGroupList()
  */
 function renderLinkList() {
-    const container = document.getElementById('link-list');
-    if (!container) return;
-
-    container.innerHTML = '';
-
-    // Update count display
-    const countEl = document.getElementById('link-count');
-    if (countEl) countEl.textContent = links.length;
-
-    if (links.length === 0) {
-        container.innerHTML = '<p class="text-muted small">No links loaded</p>';
-        return;
-    }
-
-    links.forEach(link => {
-        const div = document.createElement('div');
-        div.className = 'link-item d-flex align-items-center py-1 px-2 border-bottom';
-        div.dataset.linkId = link.id;
-
-        // Make draggable for group assignment
-        div.draggable = true;
-        div.addEventListener('dragstart', (e) => {
-            draggedItem = { type: 'link', id: link.id };
-            div.classList.add('dragging');
-        });
-        div.addEventListener('dragend', (e) => {
-            div.classList.remove('dragging');
-            draggedItem = null;
-        });
-
-        // Color indicator
-        const colorDot = document.createElement('span');
-        colorDot.style.cssText = `
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 2px;
-            background-color: ${link.color || '#0066FF'};
-            margin-right: 8px;
-            flex-shrink: 0;
-        `;
-
-        // Link name/id
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'text-truncate flex-grow-1';
-        nameSpan.textContent = link.name || link.link_id;
-        nameSpan.title = `${link.link_id} (${link.point_count} points)`;
-
-        // Group badge if assigned
-        if (link.layer_group_name) {
-            const groupBadge = document.createElement('span');
-            groupBadge.className = 'badge bg-info ms-1';
-            groupBadge.style.fontSize = '0.65em';
-            groupBadge.textContent = link.layer_group_name;
-            groupBadge.title = 'Layer Group';
-            nameSpan.appendChild(groupBadge);
-        }
-
-        // Type badge
-        const typeBadge = document.createElement('span');
-        typeBadge.className = 'badge bg-secondary ms-2';
-        typeBadge.textContent = link.link_type || 'other';
-        typeBadge.style.fontSize = '0.7em';
-
-        div.appendChild(colorDot);
-        div.appendChild(nameSpan);
-        div.appendChild(typeBadge);
-
-        // Click handler to highlight link
-        div.addEventListener('click', () => highlightLink(link));
-
-        container.appendChild(div);
-    });
+    // Links are now rendered inside folders by renderLinkGroupList()
+    // This function is kept for backwards compatibility
 }
 
 /**
@@ -1467,6 +1369,24 @@ function selectAsset(assetId) {
     document.getElementById('asset-adj-y').value = selectedAsset.adjusted_y || selectedAsset.original_y;
 
     showTab('properties');
+}
+
+function selectLink(linkId) {
+    // Find and highlight the link on canvas
+    canvas.getObjects().forEach(obj => {
+        if (obj.sheetData) obj.shadow = null;
+        if (obj.isLinkObject && obj.linkData && obj.linkData.id === linkId) {
+            canvas.setActiveObject(obj);
+            // Zoom to link
+            const bounds = obj.getBoundingRect();
+            const center = {
+                x: bounds.left + bounds.width / 2,
+                y: bounds.top + bounds.height / 2
+            };
+            canvas.viewportCenterObject(obj);
+        }
+    });
+    canvas.renderAll();
 }
 
 let _clearingSelection = false;
@@ -2465,6 +2385,10 @@ function toggleGroupVisibility(groupName, visible) {
         // Sync batch checkboxes
         document.querySelectorAll('#import-batches .batch-visibility').forEach(cb => {
             cb.checked = visible;
+        });
+    } else if (groupName === 'links') {
+        canvas.getObjects().forEach(obj => {
+            if (obj.isLinkObject) obj.visible = visible;
         });
     }
     canvas.renderAll();
@@ -4394,13 +4318,17 @@ function renderAssetGroupList() {
 
     container.innerHTML = '';
 
-    if (assetGroups.length === 0) {
-        container.innerHTML = '<p class="text-muted small">No asset groups</p>';
-        return;
-    }
+    // Count ungrouped assets
+    const ungroupedAssets = assets.filter(a => !a.layer_group);
+    
+    // Create "Ungrouped" folder first
+    const ungroupedDiv = createUngroupedFolder('asset', ungroupedAssets.length);
+    container.appendChild(ungroupedDiv);
 
-    assetGroups.forEach(group => {
-        const div = createGroupItem(group, 'asset');
+    // Render user-created groups (only root level, children rendered recursively)
+    const rootGroups = assetGroups.filter(g => !g.parent_group);
+    rootGroups.forEach(group => {
+        const div = createGroupItem(group, 'asset', 0);
         container.appendChild(div);
     });
 }
@@ -4414,27 +4342,30 @@ function renderLinkGroupList() {
 
     container.innerHTML = '';
 
-    if (linkGroups.length === 0) {
-        container.innerHTML = '<p class="text-muted small">No link groups</p>';
-        return;
-    }
+    // Count ungrouped links
+    const ungroupedLinks = links.filter(l => !l.layer_group);
+    
+    // Create "Ungrouped" folder first
+    const ungroupedDiv = createUngroupedFolder('link', ungroupedLinks.length);
+    container.appendChild(ungroupedDiv);
 
-    linkGroups.forEach(group => {
-        const div = createGroupItem(group, 'link');
+    // Render user-created groups (only root level, children rendered recursively)
+    const rootGroups = linkGroups.filter(g => !g.parent_group);
+    rootGroups.forEach(group => {
+        const div = createGroupItem(group, 'link', 0);
         container.appendChild(div);
     });
 }
 
 /**
- * Create a group item element with drag-and-drop support
+ * Create an "Ungrouped" folder element
  */
-function createGroupItem(group, type) {
+function createUngroupedFolder(type, count) {
     const div = document.createElement('div');
-    div.className = 'group-item d-flex align-items-center py-1 px-2 border-bottom';
-    div.dataset.groupId = group.id;
+    div.className = 'group-item ungrouped-folder';
     div.dataset.groupType = type;
 
-    // Make the group a drop target for items
+    // Make it a drop target to unassign items
     div.addEventListener('dragover', (e) => {
         e.preventDefault();
         if (draggedItem && draggedItem.type === type) {
@@ -4450,8 +4381,115 @@ function createGroupItem(group, type) {
         e.preventDefault();
         div.classList.remove('drop-target-active');
         if (draggedItem && draggedItem.type === type) {
+            await removeItemFromGroup(draggedItem.type, draggedItem.id);
+            draggedItem = null;
+        }
+    });
+
+    // Folder icon
+    const folderIcon = document.createElement('span');
+    folderIcon.className = 'folder-icon';
+    folderIcon.textContent = '📁';
+    folderIcon.style.marginRight = '6px';
+
+    // Folder name
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'group-name';
+    nameSpan.textContent = 'Ungrouped';
+
+    // Item count badge
+    const countBadge = document.createElement('span');
+    countBadge.className = 'group-count';
+    countBadge.textContent = count;
+
+    // Toggle to expand/collapse
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'folder-toggle';
+    toggleBtn.textContent = '▼';
+    toggleBtn.title = 'Toggle folder';
+    toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const itemsList = div.querySelector('.folder-items');
+        if (itemsList) {
+            itemsList.classList.toggle('collapsed');
+            toggleBtn.textContent = itemsList.classList.contains('collapsed') ? '▶' : '▼';
+        }
+    });
+
+    div.appendChild(toggleBtn);
+    div.appendChild(folderIcon);
+    div.appendChild(nameSpan);
+    div.appendChild(countBadge);
+
+    // Items list (collapsed by default if many items)
+    const itemsList = document.createElement('div');
+    itemsList.className = 'folder-items' + (count > 10 ? ' collapsed' : '');
+    
+    // Show items in this ungrouped folder
+    const items = type === 'asset' 
+        ? assets.filter(a => !a.layer_group)
+        : links.filter(l => !l.layer_group);
+    
+    items.forEach(item => {
+        const itemDiv = createFolderItemElement(item, type);
+        itemsList.appendChild(itemDiv);
+    });
+
+    div.appendChild(itemsList);
+    
+    if (count > 10) {
+        toggleBtn.textContent = '▶';
+    }
+
+    return div;
+}
+
+/**
+ * Create a group/folder item element with nested support
+ */
+function createGroupItem(group, type, depth = 0) {
+    const div = document.createElement('div');
+    div.className = 'group-item folder-item';
+    div.dataset.groupId = group.id;
+    div.dataset.groupType = type;
+    div.style.marginLeft = (depth * 12) + 'px';
+
+    // Make the group a drop target for items
+    div.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (draggedItem && draggedItem.type === type) {
+            div.classList.add('drop-target-active');
+        }
+    });
+
+    div.addEventListener('dragleave', (e) => {
+        div.classList.remove('drop-target-active');
+    });
+
+    div.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        div.classList.remove('drop-target-active');
+        if (draggedItem && draggedItem.type === type) {
             await moveItemToGroup(group.id, draggedItem.type, draggedItem.id);
             draggedItem = null;
+        }
+    });
+
+    // Toggle button for expand/collapse
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'folder-toggle';
+    const hasChildren = (group.child_groups && group.child_groups.length > 0) || group.item_count > 0;
+    toggleBtn.textContent = hasChildren ? '▼' : '•';
+    toggleBtn.title = hasChildren ? 'Toggle folder' : '';
+    toggleBtn.disabled = !hasChildren;
+    toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const content = div.querySelector('.folder-content');
+        if (content) {
+            content.classList.toggle('collapsed');
+            toggleBtn.textContent = content.classList.contains('collapsed') ? '▶' : '▼';
         }
     });
 
@@ -4459,94 +4497,446 @@ function createGroupItem(group, type) {
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.checked = groupVisibility[group.id] !== false;
-    checkbox.className = 'group-visibility me-2';
+    checkbox.className = 'group-visibility';
     checkbox.title = 'Toggle group visibility';
-    checkbox.addEventListener('change', () => toggleGroupVisibility(group.id, checkbox.checked));
+    checkbox.addEventListener('click', (e) => e.stopPropagation());
+    checkbox.addEventListener('change', () => toggleLayerGroupVisibility(group.id, checkbox.checked));
 
-    // Color indicator
-    const colorDot = document.createElement('span');
-    colorDot.className = 'group-color-dot';
-    colorDot.style.cssText = `
-        display: inline-block;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background-color: ${group.color || '#3498db'};
-        margin-right: 8px;
-        flex-shrink: 0;
-    `;
+    // Folder icon
+    const folderIcon = document.createElement('span');
+    folderIcon.className = 'folder-icon';
+    folderIcon.textContent = '📁';
 
     // Group name
     const nameSpan = document.createElement('span');
-    nameSpan.className = 'text-truncate flex-grow-1';
+    nameSpan.className = 'group-name';
     nameSpan.textContent = group.name;
-    nameSpan.title = `${group.name} (${group.item_count} items)`;
+    nameSpan.title = group.name;
 
     // Item count badge
     const countBadge = document.createElement('span');
-    countBadge.className = 'badge bg-secondary ms-1';
+    countBadge.className = 'group-count';
     countBadge.textContent = group.item_count || 0;
-    countBadge.style.fontSize = '0.7em';
 
-    // Joined indicator
-    if (group.is_joined) {
-        const joinedBadge = document.createElement('span');
-        joinedBadge.className = 'badge bg-info ms-1';
-        joinedBadge.textContent = 'joined';
-        joinedBadge.style.fontSize = '0.65em';
-        joinedBadge.title = 'This group is joined to a parent';
-        div.appendChild(joinedBadge);
-    }
-
-    // Join/Unjoin button
-    const joinBtn = document.createElement('button');
-    joinBtn.className = 'btn btn-sm btn-outline-secondary ms-1';
-    joinBtn.style.padding = '0 4px';
-    joinBtn.style.fontSize = '0.7em';
-    if (group.parent_group) {
-        joinBtn.textContent = '⎋';  // Unjoin icon
-        joinBtn.title = 'Unjoin from parent group';
-        joinBtn.addEventListener('click', () => unjoinGroup(group.id));
-    } else {
-        joinBtn.textContent = '⊕';  // Join icon
-        joinBtn.title = 'Join to another group';
-        joinBtn.addEventListener('click', () => showJoinGroupDialog(group, type));
-    }
+    // Settings cog button
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'folder-settings';
+    settingsBtn.textContent = '⚙';
+    settingsBtn.title = 'Folder settings';
+    settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showFolderSettingsMenu(group, type, settingsBtn);
+    });
 
     // Delete button
     const delBtn = document.createElement('button');
-    delBtn.className = 'btn btn-sm btn-outline-danger ms-1';
-    delBtn.style.padding = '0 4px';
-    delBtn.style.fontSize = '0.7em';
+    delBtn.className = 'folder-delete';
     delBtn.textContent = '×';
-    delBtn.title = 'Delete group';
-    delBtn.addEventListener('click', () => deleteLayerGroup(group.id, group.name));
+    delBtn.title = 'Delete folder';
+    delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteLayerGroup(group.id, group.name);
+    });
 
+    div.appendChild(toggleBtn);
     div.appendChild(checkbox);
-    div.appendChild(colorDot);
+    div.appendChild(folderIcon);
     div.appendChild(nameSpan);
     div.appendChild(countBadge);
-    div.appendChild(joinBtn);
+    div.appendChild(settingsBtn);
     div.appendChild(delBtn);
 
-    // Render child groups if any
+    // Folder content (child groups + items)
+    const folderContent = document.createElement('div');
+    folderContent.className = 'folder-content';
+
+    // Render child groups recursively
     if (group.child_groups && group.child_groups.length > 0) {
-        const childContainer = document.createElement('div');
-        childContainer.className = 'child-groups ms-3';
         group.child_groups.forEach(child => {
-            const childDiv = createGroupItem(child, type);
-            childContainer.appendChild(childDiv);
+            const childDiv = createGroupItem(child, type, depth + 1);
+            folderContent.appendChild(childDiv);
         });
-        div.appendChild(childContainer);
     }
+
+    // Render items in this group
+    const groupItems = type === 'asset'
+        ? assets.filter(a => a.layer_group === group.id)
+        : links.filter(l => l.layer_group === group.id);
+    
+    groupItems.forEach(item => {
+        const itemDiv = createFolderItemElement(item, type);
+        folderContent.appendChild(itemDiv);
+    });
+
+    div.appendChild(folderContent);
 
     return div;
 }
 
 /**
- * Toggle visibility of a layer group
+ * Create an item element inside a folder
  */
-async function toggleGroupVisibility(groupId, visible) {
+function createFolderItemElement(item, type) {
+    const div = document.createElement('div');
+    div.className = 'folder-item-entry';
+    div.dataset.itemId = item.id;
+    div.dataset.itemType = type;
+
+    // Make draggable
+    div.draggable = true;
+    div.addEventListener('dragstart', (e) => {
+        draggedItem = { type: type, id: item.id };
+        div.classList.add('dragging');
+        e.stopPropagation();
+    });
+    div.addEventListener('dragend', (e) => {
+        div.classList.remove('dragging');
+        draggedItem = null;
+    });
+
+    // Item indicator
+    const indicator = document.createElement('span');
+    indicator.className = 'item-indicator';
+    if (type === 'asset') {
+        indicator.textContent = '📍';
+        indicator.style.color = '#e74c3c';
+    } else {
+        indicator.style.cssText = `
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background-color: ${item.color || '#0066FF'};
+            margin-right: 6px;
+        `;
+    }
+
+    // Item name
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'item-name';
+    nameSpan.textContent = type === 'asset' ? (item.asset_id || item.name) : (item.name || item.link_id);
+    nameSpan.title = nameSpan.textContent;
+
+    // Click to select
+    div.addEventListener('click', () => {
+        if (type === 'asset') {
+            selectAsset(item.id);
+        } else {
+            selectLink(item.id);
+        }
+    });
+
+    div.appendChild(indicator);
+    div.appendChild(nameSpan);
+
+    return div;
+}
+
+/**
+ * Show folder settings context menu
+ */
+function showFolderSettingsMenu(group, type, anchorEl) {
+    // Remove any existing menu
+    const existingMenu = document.querySelector('.folder-settings-menu');
+    if (existingMenu) existingMenu.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'folder-settings-menu';
+
+    // Get ungrouped count
+    const ungroupedItems = type === 'asset'
+        ? assets.filter(a => !a.layer_group)
+        : links.filter(l => !l.layer_group);
+
+    // Menu options
+    const options = [
+        {
+            label: `Assign all ungrouped (${ungroupedItems.length})`,
+            icon: '📥',
+            disabled: ungroupedItems.length === 0,
+            action: () => assignAllUngroupedToGroup(group.id, type)
+        },
+        {
+            label: 'Rename folder',
+            icon: '✏️',
+            action: () => renameGroup(group.id, group.name)
+        },
+        {
+            label: 'Change color',
+            icon: '🎨',
+            action: () => changeGroupColor(group.id, group.color)
+        },
+        {
+            label: 'Create subfolder',
+            icon: '📁',
+            action: () => createSubfolder(group.id, type)
+        },
+        { separator: true },
+        {
+            label: 'Move to another folder',
+            icon: '↗️',
+            action: () => showMoveGroupDialog(group, type)
+        },
+        {
+            label: 'Ungroup all items',
+            icon: '📤',
+            disabled: group.item_count === 0,
+            action: () => ungroupAllItems(group.id, type)
+        }
+    ];
+
+    options.forEach(opt => {
+        if (opt.separator) {
+            const sep = document.createElement('div');
+            sep.className = 'menu-separator';
+            menu.appendChild(sep);
+        } else {
+            const item = document.createElement('div');
+            item.className = 'menu-item' + (opt.disabled ? ' disabled' : '');
+            item.innerHTML = `<span class="menu-icon">${opt.icon}</span> ${opt.label}`;
+            if (!opt.disabled) {
+                item.addEventListener('click', () => {
+                    menu.remove();
+                    opt.action();
+                });
+            }
+            menu.appendChild(item);
+        }
+    });
+
+    // Position menu near the settings button
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = rect.bottom + 'px';
+    menu.style.left = rect.left + 'px';
+    menu.style.zIndex = '9999';
+
+    document.body.appendChild(menu);
+
+    // Close on click outside
+    const closeHandler = (e) => {
+        if (!menu.contains(e.target) && e.target !== anchorEl) {
+            menu.remove();
+            document.removeEventListener('click', closeHandler);
+        }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+/**
+ * Assign all ungrouped items to a group
+ */
+async function assignAllUngroupedToGroup(groupId, type) {
+    const items = type === 'asset'
+        ? assets.filter(a => !a.layer_group)
+        : links.filter(l => !l.layer_group);
+
+    if (items.length === 0) return;
+
+    if (!confirm(`Assign ${items.length} ungrouped ${type}s to this folder?`)) return;
+
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/assign-ungrouped/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ item_type: type })
+        });
+
+        if (resp.ok) {
+            await loadProjectData();
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to assign items');
+        }
+    } catch (err) {
+        console.error('Error assigning ungrouped items:', err);
+        alert('Error assigning items');
+    }
+}
+
+/**
+ * Remove an item from its group (make it ungrouped)
+ */
+async function removeItemFromGroup(itemType, itemId) {
+    try {
+        const endpoint = itemType === 'asset' ? 'assets' : 'links';
+        const resp = await fetch(`/api/${endpoint}/${itemId}/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ layer_group: null })
+        });
+
+        if (resp.ok) {
+            await loadProjectData();
+        }
+    } catch (err) {
+        console.error('Error removing item from group:', err);
+    }
+}
+
+/**
+ * Rename a group
+ */
+async function renameGroup(groupId, currentName) {
+    const newName = prompt('Enter new folder name:', currentName);
+    if (!newName || newName === currentName) return;
+
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ name: newName })
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();
+        }
+    } catch (err) {
+        console.error('Error renaming group:', err);
+    }
+}
+
+/**
+ * Change group color
+ */
+async function changeGroupColor(groupId, currentColor) {
+    const newColor = prompt('Enter color (hex, e.g., #3498db):', currentColor || '#3498db');
+    if (!newColor) return;
+
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ color: newColor })
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();
+        }
+    } catch (err) {
+        console.error('Error changing group color:', err);
+    }
+}
+
+/**
+ * Create a subfolder under a parent group
+ */
+async function createSubfolder(parentId, type) {
+    const name = prompt('Enter subfolder name:');
+    if (!name) return;
+
+    try {
+        const resp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                name: name,
+                group_type: type,
+                parent_group: parentId
+            })
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to create subfolder');
+        }
+    } catch (err) {
+        console.error('Error creating subfolder:', err);
+    }
+}
+
+/**
+ * Show dialog to move a group to another parent
+ */
+function showMoveGroupDialog(group, type) {
+    const groups = type === 'asset' ? assetGroups : linkGroups;
+    const availableParents = groups.filter(g => g.id !== group.id && g.id !== group.parent_group);
+
+    if (availableParents.length === 0) {
+        alert('No other folders available to move to.');
+        return;
+    }
+
+    const options = ['(Root level - no parent)', ...availableParents.map(g => g.name)];
+    const choice = prompt(`Move "${group.name}" to:\n\n${options.map((o, i) => `${i}: ${o}`).join('\n')}\n\nEnter number:`);
+    
+    if (choice === null) return;
+    const idx = parseInt(choice);
+    if (isNaN(idx) || idx < 0 || idx >= options.length) {
+        alert('Invalid selection');
+        return;
+    }
+
+    const newParentId = idx === 0 ? null : availableParents[idx - 1].id;
+    moveGroupToParent(group.id, newParentId);
+}
+
+/**
+ * Move a group to a new parent
+ */
+async function moveGroupToParent(groupId, newParentId) {
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ parent_group: newParentId })
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();
+        }
+    } catch (err) {
+        console.error('Error moving group:', err);
+    }
+}
+
+/**
+ * Ungroup all items in a group (move to ungrouped)
+ */
+async function ungroupAllItems(groupId, type) {
+    if (!confirm('Remove all items from this folder? They will become ungrouped.')) return;
+
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/ungroup-all/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+
+        if (resp.ok) {
+            await loadProjectData();
+        }
+    } catch (err) {
+        console.error('Error ungrouping items:', err);
+    }
+}
+
+/**
+ * Toggle visibility of a specific layer group
+ */
+async function toggleLayerGroupVisibility(groupId, visible) {
     try {
         const resp = await fetch(`/api/layer-groups/${groupId}/toggle-visibility/`, {
             method: 'PATCH',

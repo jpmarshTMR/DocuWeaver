@@ -38,6 +38,7 @@ urlpatterns = [
     # Calibration
     path('projects/<int:pk>/calibrate/', api_views.calibrate_project, name='calibrate-project'),
 
+
     # Layer Groups
     path('projects/<int:project_pk>/layer-groups/', api_views.LayerGroupListCreate.as_view(), name='layer-group-list'),
     path('layer-groups/<int:pk>/', api_views.LayerGroupDetail.as_view(), name='layer-group-detail'),
@@ -45,9 +46,12 @@ urlpatterns = [
     path('layer-groups/<int:pk>/unjoin/', api_views.unjoin_group, name='unjoin-group'),
     path('layer-groups/<int:pk>/toggle-visibility/', api_views.toggle_group_visibility, name='toggle-group-visibility'),
     path('layer-groups/<int:pk>/move-item/', api_views.move_item_to_group, name='move-item-to-group'),
+    path('layer-groups/<int:pk>/assign-ungrouped/', api_views.assign_ungrouped_to_group, name='assign-ungrouped-to-group'),
+    path('layer-groups/<int:pk>/ungroup-all/', api_views.ungroup_all_items, name='ungroup-all-items'),
 
     # Measurement Sets
     path('projects/<int:project_pk>/measurement-sets/', api_views.MeasurementSetListCreate.as_view(), name='measurement-set-list'),
     path('measurement-sets/<int:pk>/', api_views.MeasurementSetDetail.as_view(), name='measurement-set-detail'),
     path('measurement-sets/<int:pk>/toggle-visibility/', api_views.toggle_measurement_visibility, name='toggle-measurement-visibility'),
 ]
+

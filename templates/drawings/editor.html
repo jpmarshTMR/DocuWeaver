@@ -366,12 +366,13 @@
     .group-item {
         display: flex;
         align-items: center;
-        padding: 0.5rem;
+        padding: 0.3rem 0.4rem;
         background: var(--bg-layer-item);
         border-radius: 4px;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.3rem;
         cursor: pointer;
         transition: background 0.2s, border 0.2s;
+        font-size: 0.85rem;
     }
 
     .group-item:hover {
@@ -379,34 +380,37 @@
     }
 
     .group-item .group-icon {
-        margin-right: 0.5rem;
+        margin-right: 0.4rem;
         color: #ffc107;
     }
 
     .group-item .group-name {
         flex: 1;
-        font-size: 0.9rem;
+        font-size: 0.85rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .group-item .group-count {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         color: var(--text-muted);
-        margin-right: 0.5rem;
+        margin-right: 0.3rem;
     }
 
     .group-item .group-visibility {
-        margin-right: 0.5rem;
+        margin-right: 0.3rem;
         cursor: pointer;
     }
 
     .group-item .group-actions {
         display: flex;
-        gap: 0.25rem;
+        gap: 0.15rem;
     }
 
     .group-item .group-actions button {
-        padding: 0.2rem 0.4rem;
-        font-size: 0.75rem;
+        padding: 0.15rem 0.3rem;
+        font-size: 0.7rem;
         border: none;
         border-radius: 3px;
         cursor: pointer;
@@ -416,6 +420,168 @@
 
     .group-item .group-actions button:hover {
         background: var(--bg-tool-btn-hover);
+    }
+
+    /* Folder structure styles */
+    .folder-item, .ungrouped-folder {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 0.25rem 0.3rem;
+        background: var(--bg-layer-item);
+        border-radius: 4px;
+        margin-bottom: 0.25rem;
+        font-size: 0.85rem;
+    }
+
+    .folder-item:hover, .ungrouped-folder:hover {
+        background: var(--bg-layer-item-hover);
+    }
+
+    .folder-toggle {
+        background: none;
+        border: none;
+        padding: 0 4px;
+        font-size: 0.7rem;
+        cursor: pointer;
+        color: var(--text-muted);
+        width: 16px;
+    }
+
+    .folder-toggle:disabled {
+        opacity: 0.3;
+        cursor: default;
+    }
+
+    .folder-icon {
+        margin-right: 4px;
+        font-size: 0.9rem;
+    }
+
+    .group-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+    }
+
+    .group-count {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        background: var(--bg-tool-btn);
+        padding: 1px 5px;
+        border-radius: 10px;
+        margin-left: 4px;
+    }
+
+    .group-visibility {
+        margin: 0 4px;
+        cursor: pointer;
+    }
+
+    .folder-settings, .folder-delete {
+        background: none;
+        border: none;
+        padding: 2px 4px;
+        font-size: 0.75rem;
+        cursor: pointer;
+        color: var(--text-muted);
+        border-radius: 3px;
+    }
+
+    .folder-settings:hover {
+        background: var(--bg-tool-btn-hover);
+        color: var(--text-primary);
+    }
+
+    .folder-delete:hover {
+        background: #f8d7da;
+        color: #dc3545;
+    }
+
+    .folder-content, .folder-items {
+        width: 100%;
+        padding-left: 20px;
+        margin-top: 2px;
+    }
+
+    .folder-content.collapsed, .folder-items.collapsed {
+        display: none;
+    }
+
+    .folder-item-entry {
+        display: flex;
+        align-items: center;
+        padding: 2px 6px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        border-radius: 3px;
+        margin: 1px 0;
+    }
+
+    .folder-item-entry:hover {
+        background: var(--bg-layer-item-hover);
+    }
+
+    .folder-item-entry.dragging {
+        opacity: 0.5;
+    }
+
+    .item-indicator {
+        margin-right: 6px;
+        font-size: 0.75rem;
+    }
+
+    .item-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* Folder settings menu */
+    .folder-settings-menu {
+        background: var(--bg-sidebar);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        min-width: 200px;
+        padding: 4px 0;
+    }
+
+    .folder-settings-menu .menu-item {
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+    }
+
+    .folder-settings-menu .menu-item:hover {
+        background: var(--bg-layer-item-hover);
+    }
+
+    .folder-settings-menu .menu-item.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .folder-settings-menu .menu-icon {
+        margin-right: 8px;
+        font-size: 0.9rem;
+    }
+
+    .folder-settings-menu .menu-separator {
+        height: 1px;
+        background: var(--border-color);
+        margin: 4px 0;
+    }
+
+    /* Asset/Link item in left sidebar */
+    .asset-item, .link-item {
+        font-size: 0.85rem;
+        padding: 0.3rem 0.4rem;
     }
 
     .coordinates {
@@ -810,6 +976,13 @@
                 <div class="layer-group-body" id="assets-group-body">
                     <input type="text" id="asset-search-left" placeholder="Search assets..."
                            style="width: 100%; padding: 0.3rem; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem; background: var(--bg-input); color: var(--text-primary);">
+                    
+                    <!-- Asset Groups (includes Ungrouped folder) -->
+                    <div id="asset-groups-list" style="max-height: 300px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
+                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem; margin-bottom: 0.5rem;" onclick="showCreateGroupModal('asset')">
+                        + New Folder
+                    </button>
+                    
                     <div id="import-batches"></div>
                     <button class="btn" style="width: 100%;" onclick="showImportModal()">
                         Import CSV
@@ -876,6 +1049,33 @@
             </div><!-- /layer-group -->
         </div>
 
+        <!-- Links Layer Group -->
+        <div class="tool-section">
+            <div class="layer-group">
+                <div class="layer-group-header" onclick="toggleLayerGroup('links')">
+                    <span class="layer-group-chevron" id="links-chevron">&#9660;</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">Links</span>
+                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all links">
+                        <input type="checkbox" id="links-group-vis" checked onchange="toggleGroupVisibility('links', this.checked)">
+                    </label>
+                </div>
+                <div class="layer-group-body" id="links-group-body">
+                    <input type="text" id="link-search" placeholder="Search links..."
+                           style="width: 100%; padding: 0.3rem; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem; background: var(--bg-input); color: var(--text-primary);">
+                    
+                    <!-- Link Groups (includes Ungrouped folder) -->
+                    <div id="link-groups-list" style="max-height: 300px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
+                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem; margin-bottom: 0.5rem;" onclick="showCreateGroupModal('link')">
+                        + New Folder
+                    </button>
+                    
+                    <button class="btn" style="width: 100%;" onclick="showImportLinksModal()">
+                        Import Links CSV
+                    </button>
+                </div><!-- /links-group-body -->
+            </div><!-- /layer-group -->
+        </div>
+
         <div class="tool-section">
             <h4>Export</h4>
             <button class="btn btn-success" style="width: 100%;" onclick="exportProject()">
@@ -934,9 +1134,6 @@
     <div class="sidebar-right" id="sidebar-right">
         <div class="tabs">
             <div class="tab active" data-tab="properties" onclick="showTab('properties')">Properties</div>
-            <div class="tab" data-tab="assets" onclick="showTab('assets')">Assets</div>
-            <div class="tab" data-tab="links" onclick="showTab('links')">Links</div>
-            <div class="tab" data-tab="groups" onclick="showTab('groups')">Groups</div>
         </div>
 
         <div id="properties-tab" class="tab-content active">
@@ -1005,37 +1202,6 @@
                     Save Adjustment
                 </button>
             </div>
-        </div>
-
-        <div id="assets-tab" class="tab-content">
-            <div style="margin-bottom: 1rem;">
-                <input type="text" id="asset-search" placeholder="Search assets..." style="width: 100%; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.4rem; border-radius: 4px;">
-            </div>
-            <div id="asset-list" style="max-height: 500px; overflow-y: auto;"></div>
-        </div>
-
-        <div id="links-tab" class="tab-content">
-            <div style="margin-bottom: 1rem;">
-                <input type="text" id="link-search" placeholder="Search links..." style="width: 100%; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.4rem; border-radius: 4px;">
-            </div>
-            <div id="link-list" style="max-height: 500px; overflow-y: auto;"></div>
-        </div>
-
-        <div id="groups-tab" class="tab-content">
-            <div style="margin-bottom: 1rem;">
-                <button class="btn btn-success" style="width: 100%;" onclick="showCreateGroupModal('asset')">
-                    <i class="fas fa-folder-plus"></i> New Asset Group
-                </button>
-            </div>
-            <div style="margin-bottom: 1rem;">
-                <button class="btn" style="width: 100%; background: var(--btn-secondary);" onclick="showCreateGroupModal('link')">
-                    <i class="fas fa-folder-plus"></i> New Link Group
-                </button>
-            </div>
-            <h5 style="margin-bottom: 0.5rem; color: var(--text-primary);">Asset Groups</h5>
-            <div id="asset-groups-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 1rem;"></div>
-            <h5 style="margin-bottom: 0.5rem; color: var(--text-primary);">Link Groups</h5>
-            <div id="link-groups-list" style="max-height: 200px; overflow-y: auto;"></div>
         </div>
     </div>
 </div>
