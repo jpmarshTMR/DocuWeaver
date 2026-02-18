@@ -1,7 +1,7 @@
 """Django admin configuration for drawings app."""
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ColumnPreset, ImportBatch, Link
+from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ColumnPreset, ImportBatch
 
 
 @admin.register(AssetType)
@@ -130,36 +130,3 @@ class ImportBatchAdmin(admin.ModelAdmin):
     list_display = ['filename', 'project', 'asset_count', 'created_at']
     list_filter = ['project']
     search_fields = ['filename']
-
-
-@admin.register(Link)
-class LinkAdmin(admin.ModelAdmin):
-    """Admin for managing polyline links."""
-    list_display = ['link_id', 'name', 'link_type', 'project', 'point_count', 'color_preview']
-    list_filter = ['project', 'link_type']
-    search_fields = ['link_id', 'name']
-    readonly_fields = ['point_count', 'created_at', 'updated_at']
-
-    fieldsets = (
-        (None, {
-            'fields': ('project', 'link_id', 'name', 'link_type')
-        }),
-        ('Coordinates', {
-            'fields': ('coordinates', 'point_count')
-        }),
-        ('Display', {
-            'fields': ('color', 'width', 'opacity')
-        }),
-        ('Metadata', {
-            'fields': ('metadata', 'import_batch', 'created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
-    )
-
-    def color_preview(self, obj):
-        return format_html(
-            '<span style="background-color: {}; padding: 3px 12px; border-radius: 2px;">&nbsp;</span> {}',
-            obj.color,
-            obj.color
-        )
-    color_preview.short_description = 'Color'

@@ -59,6 +59,13 @@ let measurePreviewLabel = null;  // Live distance label near cursor
 // PDF inversion state
 let isPdfInverted = false;
 
+// Layer group and measurement set state
+let assetGroups = [];  // Asset layer groups
+let linkGroups = [];   // Link layer groups
+let measurementSets = [];  // Saved measurement sets
+let groupVisibility = {};  // { groupId: boolean } visibility cache
+let draggedItem = null;  // For drag-and-drop between groups
+
 // Undo system
 const undoStack = [];
 const MAX_UNDO_STEPS = 50;
@@ -641,6 +648,11 @@ async function loadProjectData() {
         renderLinkList();
         renderImportBatches();
 
+        // Load layer groups and measurement sets
+        await loadLayerGroups();
+        await loadMeasurementSets();
+        renderSavedMeasurementsOnCanvas();
+
         // Restore reference point marker if configured
         if (refAssetId && (refPixelX !== 0 || refPixelY !== 0)) {
             drawVerifyRefMarker(refPixelX, refPixelY);
@@ -692,6 +704,18 @@ function renderAssetList() {
         const div = document.createElement('div');
         div.className = 'asset-item' + (asset.is_adjusted ? ' adjusted' : '');
 
+        // Make draggable for group assignment
+        div.draggable = true;
+        div.dataset.assetId = asset.id;
+        div.addEventListener('dragstart', (e) => {
+            draggedItem = { type: 'asset', id: asset.id };
+            div.classList.add('dragging');
+        });
+        div.addEventListener('dragend', (e) => {
+            div.classList.remove('dragging');
+            draggedItem = null;
+        });
+
         // Delete button
         const delBtn = document.createElement('button');
         delBtn.className = 'asset-delete-btn';
@@ -704,6 +728,16 @@ function renderAssetList() {
         const strong = document.createElement('strong');
         strong.textContent = asset.asset_id;  // Safe: textContent escapes HTML
         div.appendChild(strong);
+
+        // Group badge if assigned
+        if (asset.layer_group_name) {
+            const groupBadge = document.createElement('span');
+            groupBadge.className = 'badge bg-info ms-1';
+            groupBadge.style.fontSize = '0.65em';
+            groupBadge.textContent = asset.layer_group_name;
+            groupBadge.title = 'Layer Group';
+            div.appendChild(groupBadge);
+        }
 
         if (asset.name) {
             div.appendChild(document.createElement('br'));
@@ -735,6 +769,14 @@ function renderAssetList() {
         filterAssetList(query);
         if (query) showTab('assets');  // Auto-switch to assets tab
     });
+
+    // Link search (right sidebar)
+    const linkSearchEl = document.getElementById('link-search');
+    if (linkSearchEl) {
+        linkSearchEl.addEventListener('input', function(e) {
+            filterLinkList(e.target.value);
+        });
+    }
 }
 
 function filterAssetList(query) {
@@ -744,6 +786,19 @@ function filterAssetList(query) {
         if (!asset) return;
         const matches = !q || asset.asset_id.toLowerCase().includes(q) ||
                       (asset.name && asset.name.toLowerCase().includes(q));
+        item.style.display = matches ? '' : 'none';
+    });
+}
+
+function filterLinkList(query) {
+    const q = (query || '').toLowerCase();
+    document.querySelectorAll('.link-item').forEach((item) => {
+        const linkId = item.dataset.linkId;
+        const link = links.find(l => l.id == linkId);
+        if (!link) return;
+        const matches = !q || (link.link_id && link.link_id.toLowerCase().includes(q)) ||
+                      (link.name && link.name.toLowerCase().includes(q)) ||
+                      (link.link_type && link.link_type.toLowerCase().includes(q));
         item.style.display = matches ? '' : 'none';
     });
 }
@@ -923,6 +978,11 @@ function renderAssetsOnCanvas() {
     }
 
     assets.forEach(asset => {
+        // Check if asset's group is visible
+        if (asset.layer_group && groupVisibility[asset.layer_group] === false) {
+            return;  // Skip hidden group assets
+        }
+
         const pos = assetMeterToPixel(asset.current_x, asset.current_y);
 
         const assetObj = createAssetShape(asset, pos.x, pos.y);
@@ -1145,6 +1205,11 @@ function renderLinksOnCanvas() {
     }
 
     links.forEach(link => {
+        // Check if link's group is visible
+        if (link.layer_group && groupVisibility[link.layer_group] === false) {
+            return;  // Skip hidden group links
+        }
+
         if (!link.coordinates || link.coordinates.length < 2) return;
 
         // Convert coordinates to pixel positions
@@ -1197,6 +1262,17 @@ function renderLinkList() {
         div.className = 'link-item d-flex align-items-center py-1 px-2 border-bottom';
         div.dataset.linkId = link.id;
 
+        // Make draggable for group assignment
+        div.draggable = true;
+        div.addEventListener('dragstart', (e) => {
+            draggedItem = { type: 'link', id: link.id };
+            div.classList.add('dragging');
+        });
+        div.addEventListener('dragend', (e) => {
+            div.classList.remove('dragging');
+            draggedItem = null;
+        });
+
         // Color indicator
         const colorDot = document.createElement('span');
         colorDot.style.cssText = `
@@ -1214,6 +1290,16 @@ function renderLinkList() {
         nameSpan.className = 'text-truncate flex-grow-1';
         nameSpan.textContent = link.name || link.link_id;
         nameSpan.title = `${link.link_id} (${link.point_count} points)`;
+
+        // Group badge if assigned
+        if (link.layer_group_name) {
+            const groupBadge = document.createElement('span');
+            groupBadge.className = 'badge bg-info ms-1';
+            groupBadge.style.fontSize = '0.65em';
+            groupBadge.textContent = link.layer_group_name;
+            groupBadge.title = 'Layer Group';
+            nameSpan.appendChild(groupBadge);
+        }
 
         // Type badge
         const typeBadge = document.createElement('span');
@@ -4179,6 +4265,824 @@ async function deleteAsset(assetId, assetLabel) {
         console.error('Error deleting asset:', err);
         alert('Error deleting asset');
     }
+}
+
+// ==================== Layer Groups ====================
+
+/**
+ * Show the create group modal
+ */
+function showCreateGroupModal(groupType) {
+    const modal = document.getElementById('createGroupModal');
+    const typeInput = document.getElementById('group-type');
+    const parentSelect = document.getElementById('group-parent');
+    const nameInput = document.getElementById('group-name');
+
+    if (!modal) return;
+
+    typeInput.value = groupType;
+    nameInput.value = '';
+
+    // Populate parent options
+    const groups = groupType === 'asset' ? assetGroups : linkGroups;
+    parentSelect.innerHTML = '<option value="">None (Root level)</option>';
+    groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        parentSelect.appendChild(opt);
+    });
+
+    modal.style.display = 'flex';
+}
+
+/**
+ * Hide the create group modal
+ */
+function hideCreateGroupModal() {
+    const modal = document.getElementById('createGroupModal');
+    if (modal) modal.style.display = 'none';
+}
+
+/**
+ * Create a new layer group
+ */
+async function createLayerGroup(e) {
+    e.preventDefault();
+
+    const groupType = document.getElementById('group-type').value;
+    const name = document.getElementById('group-name').value;
+    const parentId = document.getElementById('group-parent').value;
+
+    try {
+        const resp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                name: name,
+                group_type: groupType,
+                parent_group: parentId || null
+            })
+        });
+
+        if (resp.ok) {
+            hideCreateGroupModal();
+            await loadLayerGroups();
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to create group');
+        }
+    } catch (err) {
+        console.error('Error creating group:', err);
+        alert('Error creating group');
+    }
+}
+
+// Set up form handler when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('createGroupForm');
+    if (form) {
+        form.addEventListener('submit', createLayerGroup);
+    }
+});
+
+/**
+ * Load layer groups for the project
+ */
+async function loadLayerGroups() {
+    try {
+        // Load asset groups
+        const assetResp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=asset`);
+        if (assetResp.ok) {
+            assetGroups = await assetResp.json();
+        }
+
+        // Load link groups
+        const linkResp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=link`);
+        if (linkResp.ok) {
+            linkGroups = await linkResp.json();
+        }
+
+        // Initialize visibility from loaded data
+        [...assetGroups, ...linkGroups].forEach(g => {
+            groupVisibility[g.id] = g.visible;
+        });
+
+        renderLayerGroupsUI();
+    } catch (err) {
+        console.error('Error loading layer groups:', err);
+    }
+}
+
+/**
+ * Render the layer groups panel UI
+ */
+function renderLayerGroupsUI() {
+    renderAssetGroupList();
+    renderLinkGroupList();
+}
+
+/**
+ * Render asset groups in the sidebar
+ */
+function renderAssetGroupList() {
+    const container = document.getElementById('asset-groups-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (assetGroups.length === 0) {
+        container.innerHTML = '<p class="text-muted small">No asset groups</p>';
+        return;
+    }
+
+    assetGroups.forEach(group => {
+        const div = createGroupItem(group, 'asset');
+        container.appendChild(div);
+    });
+}
+
+/**
+ * Render link groups in the sidebar
+ */
+function renderLinkGroupList() {
+    const container = document.getElementById('link-groups-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (linkGroups.length === 0) {
+        container.innerHTML = '<p class="text-muted small">No link groups</p>';
+        return;
+    }
+
+    linkGroups.forEach(group => {
+        const div = createGroupItem(group, 'link');
+        container.appendChild(div);
+    });
+}
+
+/**
+ * Create a group item element with drag-and-drop support
+ */
+function createGroupItem(group, type) {
+    const div = document.createElement('div');
+    div.className = 'group-item d-flex align-items-center py-1 px-2 border-bottom';
+    div.dataset.groupId = group.id;
+    div.dataset.groupType = type;
+
+    // Make the group a drop target for items
+    div.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (draggedItem && draggedItem.type === type) {
+            div.classList.add('drop-target-active');
+        }
+    });
+
+    div.addEventListener('dragleave', (e) => {
+        div.classList.remove('drop-target-active');
+    });
+
+    div.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        div.classList.remove('drop-target-active');
+        if (draggedItem && draggedItem.type === type) {
+            await moveItemToGroup(group.id, draggedItem.type, draggedItem.id);
+            draggedItem = null;
+        }
+    });
+
+    // Visibility checkbox
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = groupVisibility[group.id] !== false;
+    checkbox.className = 'group-visibility me-2';
+    checkbox.title = 'Toggle group visibility';
+    checkbox.addEventListener('change', () => toggleGroupVisibility(group.id, checkbox.checked));
+
+    // Color indicator
+    const colorDot = document.createElement('span');
+    colorDot.className = 'group-color-dot';
+    colorDot.style.cssText = `
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background-color: ${group.color || '#3498db'};
+        margin-right: 8px;
+        flex-shrink: 0;
+    `;
+
+    // Group name
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'text-truncate flex-grow-1';
+    nameSpan.textContent = group.name;
+    nameSpan.title = `${group.name} (${group.item_count} items)`;
+
+    // Item count badge
+    const countBadge = document.createElement('span');
+    countBadge.className = 'badge bg-secondary ms-1';
+    countBadge.textContent = group.item_count || 0;
+    countBadge.style.fontSize = '0.7em';
+
+    // Joined indicator
+    if (group.is_joined) {
+        const joinedBadge = document.createElement('span');
+        joinedBadge.className = 'badge bg-info ms-1';
+        joinedBadge.textContent = 'joined';
+        joinedBadge.style.fontSize = '0.65em';
+        joinedBadge.title = 'This group is joined to a parent';
+        div.appendChild(joinedBadge);
+    }
+
+    // Join/Unjoin button
+    const joinBtn = document.createElement('button');
+    joinBtn.className = 'btn btn-sm btn-outline-secondary ms-1';
+    joinBtn.style.padding = '0 4px';
+    joinBtn.style.fontSize = '0.7em';
+    if (group.parent_group) {
+        joinBtn.textContent = '⎋';  // Unjoin icon
+        joinBtn.title = 'Unjoin from parent group';
+        joinBtn.addEventListener('click', () => unjoinGroup(group.id));
+    } else {
+        joinBtn.textContent = '⊕';  // Join icon
+        joinBtn.title = 'Join to another group';
+        joinBtn.addEventListener('click', () => showJoinGroupDialog(group, type));
+    }
+
+    // Delete button
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-sm btn-outline-danger ms-1';
+    delBtn.style.padding = '0 4px';
+    delBtn.style.fontSize = '0.7em';
+    delBtn.textContent = '×';
+    delBtn.title = 'Delete group';
+    delBtn.addEventListener('click', () => deleteLayerGroup(group.id, group.name));
+
+    div.appendChild(checkbox);
+    div.appendChild(colorDot);
+    div.appendChild(nameSpan);
+    div.appendChild(countBadge);
+    div.appendChild(joinBtn);
+    div.appendChild(delBtn);
+
+    // Render child groups if any
+    if (group.child_groups && group.child_groups.length > 0) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'child-groups ms-3';
+        group.child_groups.forEach(child => {
+            const childDiv = createGroupItem(child, type);
+            childContainer.appendChild(childDiv);
+        });
+        div.appendChild(childContainer);
+    }
+
+    return div;
+}
+
+/**
+ * Toggle visibility of a layer group
+ */
+async function toggleGroupVisibility(groupId, visible) {
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/toggle-visibility/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ visible })
+        });
+
+        if (resp.ok) {
+            groupVisibility[groupId] = visible;
+            // Re-render assets and links to reflect visibility change
+            clearAssetsFromCanvas();
+            clearLinksFromCanvas();
+            renderAssetsOnCanvas();
+            renderLinksOnCanvas();
+        }
+    } catch (err) {
+        console.error('Error toggling group visibility:', err);
+    }
+}
+
+/**
+ * Show dialog to join a group to another
+ */
+function showJoinGroupDialog(group, type) {
+    const groups = type === 'asset' ? assetGroups : linkGroups;
+    const otherGroups = groups.filter(g => g.id !== group.id && !g.parent_group);
+
+    if (otherGroups.length === 0) {
+        alert('No other groups available to join to.');
+        return;
+    }
+
+    const groupNames = otherGroups.map(g => g.name).join('\n');
+    const parentName = prompt(`Join "${group.name}" to which group?\n\nAvailable groups:\n${groupNames}`);
+    if (!parentName) return;
+
+    const parent = otherGroups.find(g => g.name.toLowerCase() === parentName.toLowerCase());
+    if (!parent) {
+        alert('Group not found');
+        return;
+    }
+
+    joinGroups(parent.id, group.id);
+}
+
+/**
+ * Join one group to another
+ */
+async function joinGroups(parentId, childId) {
+    try {
+        const resp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/join/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ parent_id: parentId, child_id: childId })
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();  // Refresh groups
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to join groups');
+        }
+    } catch (err) {
+        console.error('Error joining groups:', err);
+    }
+}
+
+/**
+ * Unjoin a group from its parent
+ */
+async function unjoinGroup(groupId) {
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/unjoin/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();  // Refresh groups
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to unjoin group');
+        }
+    } catch (err) {
+        console.error('Error unjoining group:', err);
+    }
+}
+
+/**
+ * Delete a layer group
+ */
+async function deleteLayerGroup(groupId, groupName) {
+    if (!confirm(`Delete group "${groupName}" and all its items?`)) return;
+
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/`, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+
+        if (resp.ok) {
+            await loadLayerGroups();
+            // Reload assets and links as items may have been deleted
+            await loadProjectData();
+        }
+    } catch (err) {
+        console.error('Error deleting group:', err);
+    }
+}
+
+/**
+ * Move an item (asset or link) to a different group
+ */
+async function moveItemToGroup(groupId, itemType, itemId) {
+    try {
+        const resp = await fetch(`/api/layer-groups/${groupId}/move-item/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ item_type: itemType, item_id: itemId })
+        });
+
+        if (resp.ok) {
+            // Refresh data
+            await loadLayerGroups();
+            await loadProjectData();
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to move item');
+        }
+    } catch (err) {
+        console.error('Error moving item to group:', err);
+    }
+}
+
+/**
+ * Clear all asset objects from canvas
+ */
+function clearAssetsFromCanvas() {
+    const assetObjs = canvas.getObjects().filter(obj => obj.assetData);
+    assetObjs.forEach(obj => canvas.remove(obj));
+}
+
+/**
+ * Clear all link objects from canvas
+ */
+function clearLinksFromCanvas() {
+    const linkObjs = canvas.getObjects().filter(obj => obj.isLinkObject);
+    linkObjs.forEach(obj => canvas.remove(obj));
+}
+
+// ==================== Measurement Sets ====================
+
+/**
+ * Load saved measurement sets
+ */
+async function loadMeasurementSets() {
+    try {
+        const resp = await fetch(`/api/projects/${PROJECT_ID}/measurement-sets/`);
+        if (resp.ok) {
+            measurementSets = await resp.json();
+            renderMeasurementSetsUI();
+        }
+    } catch (err) {
+        console.error('Error loading measurement sets:', err);
+    }
+}
+
+/**
+ * Render measurement sets list in the sidebar
+ */
+function renderMeasurementSetsUI() {
+    const container = document.getElementById('measurement-sets-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (measurementSets.length === 0) {
+        container.innerHTML = '<p class="text-muted small">No saved measurements</p>';
+        return;
+    }
+
+    measurementSets.forEach(ms => {
+        const div = document.createElement('div');
+        div.className = 'measurement-set-item d-flex align-items-center py-1 px-2 border-bottom';
+        div.dataset.measurementId = ms.id;
+
+        // Visibility checkbox
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = ms.visible;
+        checkbox.className = 'ms-visibility me-2';
+        checkbox.title = 'Toggle measurement visibility';
+        checkbox.addEventListener('change', () => toggleMeasurementSetVisibility(ms.id, checkbox.checked));
+
+        // Color indicator
+        const colorDot = document.createElement('span');
+        colorDot.style.cssText = `
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            background-color: ${ms.color || '#00bcd4'};
+            margin-right: 8px;
+            flex-shrink: 0;
+        `;
+
+        // Name
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'text-truncate flex-grow-1';
+        nameSpan.textContent = ms.name;
+
+        // Type badge
+        const typeBadge = document.createElement('span');
+        typeBadge.className = 'badge ms-1';
+        typeBadge.className += ms.measurement_type === 'chain' ? ' bg-warning' : ' bg-info';
+        typeBadge.textContent = ms.measurement_type;
+        typeBadge.style.fontSize = '0.65em';
+
+        // Distance display
+        const distSpan = document.createElement('span');
+        distSpan.className = 'small text-muted ms-1';
+        if (ms.total_distance_meters) {
+            distSpan.textContent = `${ms.total_distance_meters.toFixed(2)}m`;
+        } else if (ms.total_distance_pixels) {
+            distSpan.textContent = `${ms.total_distance_pixels.toFixed(0)}px`;
+        }
+
+        // View button
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'btn btn-sm btn-outline-primary ms-1';
+        viewBtn.style.padding = '0 4px';
+        viewBtn.style.fontSize = '0.7em';
+        viewBtn.textContent = '👁';
+        viewBtn.title = 'Show on canvas';
+        viewBtn.addEventListener('click', () => showMeasurementSetOnCanvas(ms));
+
+        // Delete button
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-outline-danger ms-1';
+        delBtn.style.padding = '0 4px';
+        delBtn.style.fontSize = '0.7em';
+        delBtn.textContent = '×';
+        delBtn.title = 'Delete measurement';
+        delBtn.addEventListener('click', () => deleteMeasurementSet(ms.id, ms.name));
+
+        div.appendChild(checkbox);
+        div.appendChild(colorDot);
+        div.appendChild(nameSpan);
+        div.appendChild(typeBadge);
+        div.appendChild(distSpan);
+        div.appendChild(viewBtn);
+        div.appendChild(delBtn);
+
+        container.appendChild(div);
+    });
+}
+
+/**
+ * Toggle visibility of a measurement set
+ */
+async function toggleMeasurementSetVisibility(msId, visible) {
+    try {
+        const resp = await fetch(`/api/measurement-sets/${msId}/toggle-visibility/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ visible })
+        });
+
+        if (resp.ok) {
+            // Update local state
+            const ms = measurementSets.find(m => m.id === msId);
+            if (ms) ms.visible = visible;
+
+            // Re-render measurement overlays
+            renderSavedMeasurementsOnCanvas();
+        }
+    } catch (err) {
+        console.error('Error toggling measurement visibility:', err);
+    }
+}
+
+/**
+ * Show a measurement set on the canvas
+ */
+function showMeasurementSetOnCanvas(ms) {
+    if (!ms.points || ms.points.length === 0) return;
+
+    // Clear existing measurement preview
+    clearMeasurementOverlays();
+
+    // Draw the measurement on canvas
+    const color = ms.color || '#00bcd4';
+    const points = ms.points;
+
+    if (points.length === 1) {
+        // Single point
+        const marker = new fabric.Circle({
+            left: points[0].x,
+            top: points[0].y,
+            radius: 6,
+            fill: color,
+            stroke: '#fff',
+            strokeWidth: 2,
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false,
+            isMeasurementOverlay: true
+        });
+        canvas.add(marker);
+    } else {
+        // Draw lines between points
+        for (let i = 0; i < points.length - 1; i++) {
+            const line = new fabric.Line(
+                [points[i].x, points[i].y, points[i + 1].x, points[i + 1].y],
+                {
+                    stroke: color,
+                    strokeWidth: 2,
+                    selectable: false,
+                    evented: false,
+                    isMeasurementOverlay: true
+                }
+            );
+            canvas.add(line);
+        }
+
+        // Draw point markers
+        points.forEach((pt, idx) => {
+            const marker = new fabric.Circle({
+                left: pt.x,
+                top: pt.y,
+                radius: idx === 0 || idx === points.length - 1 ? 6 : 4,
+                fill: idx === 0 ? '#00ff00' : (idx === points.length - 1 ? '#ff0000' : color),
+                stroke: '#fff',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center',
+                selectable: false,
+                evented: false,
+                isMeasurementOverlay: true
+            });
+            canvas.add(marker);
+        });
+
+        // Add distance label at midpoint of last segment
+        if (ms.total_distance_meters || ms.total_distance_pixels) {
+            const lastPt = points[points.length - 1];
+            const prevPt = points[points.length - 2];
+            const midX = (lastPt.x + prevPt.x) / 2;
+            const midY = (lastPt.y + prevPt.y) / 2;
+            const distText = ms.total_distance_meters
+                ? `${ms.total_distance_meters.toFixed(2)}m`
+                : `${ms.total_distance_pixels.toFixed(0)}px`;
+
+            const label = new fabric.Text(distText, {
+                left: midX + 10,
+                top: midY - 10,
+                fontSize: 12,
+                fill: color,
+                backgroundColor: 'rgba(255,255,255,0.8)',
+                selectable: false,
+                evented: false,
+                isMeasurementOverlay: true
+            });
+            canvas.add(label);
+        }
+    }
+
+    canvas.renderAll();
+}
+
+/**
+ * Render all visible saved measurements on canvas
+ */
+function renderSavedMeasurementsOnCanvas() {
+    // Clear existing measurement overlays (but not the active measurement tool overlays)
+    const savedOverlays = canvas.getObjects().filter(obj => obj.isSavedMeasurement);
+    savedOverlays.forEach(obj => canvas.remove(obj));
+
+    // Draw each visible measurement set
+    measurementSets.filter(ms => ms.visible).forEach(ms => {
+        if (!ms.points || ms.points.length === 0) return;
+
+        const color = ms.color || '#00bcd4';
+        const points = ms.points;
+
+        if (points.length >= 2) {
+            // Draw lines
+            for (let i = 0; i < points.length - 1; i++) {
+                const line = new fabric.Line(
+                    [points[i].x, points[i].y, points[i + 1].x, points[i + 1].y],
+                    {
+                        stroke: color,
+                        strokeWidth: 2,
+                        strokeDashArray: [5, 5],
+                        selectable: false,
+                        evented: false,
+                        isSavedMeasurement: true,
+                        measurementSetId: ms.id
+                    }
+                );
+                canvas.add(line);
+                line.sendToBack();
+            }
+        }
+
+        // Draw point markers
+        points.forEach((pt, idx) => {
+            const marker = new fabric.Circle({
+                left: pt.x,
+                top: pt.y,
+                radius: 4,
+                fill: color,
+                stroke: '#fff',
+                strokeWidth: 1,
+                originX: 'center',
+                originY: 'center',
+                selectable: false,
+                evented: false,
+                isSavedMeasurement: true,
+                measurementSetId: ms.id
+            });
+            canvas.add(marker);
+        });
+    });
+
+    canvas.renderAll();
+}
+
+/**
+ * Save current measurement as a measurement set
+ */
+async function saveCurrentMeasurement() {
+    if (measurePoints.length === 0) {
+        alert('No measurement points to save');
+        return;
+    }
+
+    const name = prompt('Enter a name for this measurement set:');
+    if (!name || !name.trim()) return;
+
+    // Calculate total distance
+    let totalPixels = 0;
+    for (let i = 1; i < measurePoints.length; i++) {
+        const dx = measurePoints[i].x - measurePoints[i - 1].x;
+        const dy = measurePoints[i].y - measurePoints[i - 1].y;
+        totalPixels += Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // Convert to meters if calibrated
+    let totalMeters = null;
+    if (PROJECT_DATA.pixels_per_meter) {
+        totalMeters = totalPixels / PROJECT_DATA.pixels_per_meter;
+    }
+
+    const data = {
+        name: name.trim(),
+        measurement_type: measureMode,
+        points: measurePoints,
+        color: '#00bcd4',
+        total_distance_pixels: totalPixels,
+        total_distance_meters: totalMeters
+    };
+
+    try {
+        const resp = await fetch(`/api/projects/${PROJECT_ID}/measurement-sets/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify(data)
+        });
+
+        if (resp.ok) {
+            // Clear current measurement
+            clearMeasurement();
+            // Reload measurement sets
+            await loadMeasurementSets();
+            alert('Measurement saved!');
+        } else {
+            const errData = await resp.json();
+            alert(errData.error || 'Failed to save measurement');
+        }
+    } catch (err) {
+        console.error('Error saving measurement:', err);
+        alert('Error saving measurement');
+    }
+}
+
+/**
+ * Delete a measurement set
+ */
+async function deleteMeasurementSet(msId, name) {
+    if (!confirm(`Delete measurement "${name}"?`)) return;
+
+    try {
+        const resp = await fetch(`/api/measurement-sets/${msId}/`, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+
+        if (resp.ok) {
+            await loadMeasurementSets();
+            renderSavedMeasurementsOnCanvas();
+        }
+    } catch (err) {
+        console.error('Error deleting measurement set:', err);
+    }
+}
+
+/**
+ * Clear measurement overlays from canvas
+ */
+function clearMeasurementOverlays() {
+    const overlays = canvas.getObjects().filter(obj => obj.isMeasurementOverlay);
+    overlays.forEach(obj => canvas.remove(obj));
+    canvas.renderAll();
 }
 
 // ==================== Dark Mode & PDF Inversion ====================

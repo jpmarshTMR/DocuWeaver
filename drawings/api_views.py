@@ -9,13 +9,13 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Project, Sheet, Asset, AdjustmentLog, AssetType, ColumnPreset, ImportBatch, Link
+from .models import Project, Sheet, Asset, AdjustmentLog, AssetType, ColumnPreset, ImportBatch, Link, LayerGroup, MeasurementSet
 
 logger = logging.getLogger(__name__)
 from .serializers import (
     ProjectSerializer, ProjectListSerializer,
     SheetSerializer, AssetSerializer, AdjustmentLogSerializer,
-    ImportBatchSerializer, LinkSerializer
+    ImportBatchSerializer, LinkSerializer, LayerGroupSerializer, MeasurementSetSerializer
 )
 from .services.pdf_processor import render_pdf_page, get_pdf_page_count
 from .services.csv_importer import import_assets_from_csv, import_links_from_csv
@@ -146,24 +146,6 @@ class AssetDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = AssetSerializer
 
 
-class LinkListCreate(generics.ListCreateAPIView):
-    """List and create links for a project."""
-    serializer_class = LinkSerializer
-
-    def get_queryset(self):
-        return Link.objects.filter(project_id=self.kwargs['project_pk'])
-
-    def perform_create(self, serializer):
-        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
-        serializer.save(project=project)
-
-
-class LinkDetail(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update or delete a specific link."""
-    queryset = Link.objects.all()
-    serializer_class = LinkSerializer
-
-
 @api_view(['POST'])
 def adjust_asset(request, pk):
     """Adjust an asset's position and log the change."""
@@ -241,40 +223,6 @@ def import_csv(request, project_pk):
     except Exception as e:
         logger.error("CSV import failed for project %d: %s", project_pk, e)
         return Response({'error': 'CSV import failed'}, status=400)
-
-
-@api_view(['POST'])
-def import_links_csv(request, project_pk):
-    """Import links from CSV file with column mapping."""
-    project = get_object_or_404(Project, pk=project_pk)
-
-    if 'file' not in request.FILES:
-        return Response({'error': 'No file provided'}, status=400)
-
-    csv_file = request.FILES['file']
-
-    # Parse column_mapping if provided (JSON string in form data)
-    column_mapping = None
-    mapping_raw = request.data.get('column_mapping')
-    if mapping_raw:
-        try:
-            column_mapping = json.loads(mapping_raw) if isinstance(mapping_raw, str) else mapping_raw
-        except (json.JSONDecodeError, TypeError):
-            return Response({'error': 'Invalid column_mapping JSON'}, status=400)
-
-    try:
-        result = import_links_from_csv(
-            project, csv_file,
-            column_mapping=column_mapping,
-            filename=csv_file.name,
-        )
-        return Response(result)
-    except ValueError as e:
-        logger.error("Link CSV import failed for project %d: %s", project_pk, e)
-        return Response({'error': str(e)}, status=400)
-    except Exception as e:
-        logger.error("Link CSV import failed for project %d: %s", project_pk, e)
-        return Response({'error': 'Link CSV import failed'}, status=400)
 
 
 @api_view(['POST'])
@@ -545,4 +493,224 @@ def split_sheet(request, pk):
     return Response({
         'original_id': original.id,
         'new_sheet': SheetSerializer(new_sheet, context={'request': request}).data
+    })
+
+
+# ============================================================================
+# Link Views
+# ============================================================================
+
+class LinkListCreate(generics.ListCreateAPIView):
+    """List and create links for a project."""
+    serializer_class = LinkSerializer
+
+    def get_queryset(self):
+        return Link.objects.filter(project_id=self.kwargs['project_pk'])
+
+    def perform_create(self, serializer):
+        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
+        serializer.save(project=project)
+
+
+class LinkDetail(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update or delete a link."""
+    queryset = Link.objects.all()
+    serializer_class = LinkSerializer
+
+
+@api_view(['POST'])
+def import_links_csv(request, project_pk):
+    """Import links from CSV file."""
+    project = get_object_or_404(Project, pk=project_pk)
+
+    csv_file = request.FILES.get('csv_file')
+    if not csv_file:
+        return Response({'error': 'No file provided'}, status=400)
+
+    # Parse column mapping from form data
+    column_mapping = {}
+    if 'column_mapping' in request.data:
+        try:
+            column_mapping = json.loads(request.data['column_mapping'])
+        except json.JSONDecodeError:
+            return Response({'error': 'Invalid column_mapping JSON'}, status=400)
+
+    try:
+        results = import_links_from_csv(
+            project, csv_file, column_mapping, filename=csv_file.name
+        )
+        return Response(results)
+    except ValueError as e:
+        return Response({'error': str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Link CSV import failed")
+        return Response({'error': 'Import failed'}, status=500)
+
+
+# ============================================================================
+# Layer Group Views
+# ============================================================================
+
+class LayerGroupListCreate(generics.ListCreateAPIView):
+    """List and create layer groups for a project."""
+    serializer_class = LayerGroupSerializer
+
+    def get_queryset(self):
+        queryset = LayerGroup.objects.filter(project_id=self.kwargs['project_pk'])
+        # Filter by group_type if specified
+        group_type = self.request.query_params.get('type')
+        if group_type in ('asset', 'link'):
+            queryset = queryset.filter(group_type=group_type)
+        # By default, only return top-level groups (those without parents)
+        if self.request.query_params.get('top_level', 'true').lower() == 'true':
+            queryset = queryset.filter(parent_group__isnull=True)
+        return queryset
+
+    def perform_create(self, serializer):
+        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
+        serializer.save(project=project)
+
+
+class LayerGroupDetail(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update or delete a layer group."""
+    queryset = LayerGroup.objects.all()
+    serializer_class = LayerGroupSerializer
+
+
+@api_view(['POST'])
+def join_groups(request, project_pk):
+    """Join one group to another (make child a sub-group of parent)."""
+    parent_id = request.data.get('parent_id')
+    child_id = request.data.get('child_id')
+
+    if not parent_id or not child_id:
+        return Response({'error': 'parent_id and child_id are required'}, status=400)
+
+    parent = get_object_or_404(LayerGroup, pk=parent_id, project_id=project_pk)
+    child = get_object_or_404(LayerGroup, pk=child_id, project_id=project_pk)
+
+    if parent.group_type != child.group_type:
+        return Response({'error': 'Cannot join groups of different types'}, status=400)
+
+    if parent_id == child_id:
+        return Response({'error': 'Cannot join a group to itself'}, status=400)
+
+    # Prevent circular references
+    if parent.parent_group and parent.parent_group.id == child.id:
+        return Response({'error': 'Cannot create circular group reference'}, status=400)
+
+    child.parent_group = parent
+    child.save()
+
+    logger.info("Group %d joined to parent %d", child.id, parent.id)
+    return Response({
+        'status': 'joined',
+        'parent': LayerGroupSerializer(parent).data,
+        'child': LayerGroupSerializer(child).data
+    })
+
+
+@api_view(['POST'])
+def unjoin_group(request, pk):
+    """Remove a group from its parent (make it top-level again)."""
+    group = get_object_or_404(LayerGroup, pk=pk)
+
+    if not group.parent_group:
+        return Response({'error': 'Group is not joined to any parent'}, status=400)
+
+    old_parent_id = group.parent_group.id
+    group.parent_group = None
+    group.save()
+
+    logger.info("Group %d unjoined from parent %d", group.id, old_parent_id)
+    return Response({
+        'status': 'unjoined',
+        'group': LayerGroupSerializer(group).data
+    })
+
+
+@api_view(['PATCH'])
+def toggle_group_visibility(request, pk):
+    """Toggle or set visibility of a group."""
+    group = get_object_or_404(LayerGroup, pk=pk)
+
+    # If 'visible' is provided, use it; otherwise toggle
+    if 'visible' in request.data:
+        group.visible = bool(request.data.get('visible'))
+    else:
+        group.visible = not group.visible
+
+    group.save()
+
+    return Response({
+        'id': group.id,
+        'visible': group.visible
+    })
+
+
+@api_view(['PATCH'])
+def move_item_to_group(request, pk):
+    """Move an asset or link to a different group."""
+    group = get_object_or_404(LayerGroup, pk=pk)
+    item_type = request.data.get('item_type')  # 'asset' or 'link'
+    item_id = request.data.get('item_id')
+
+    if not item_type or not item_id:
+        return Response({'error': 'item_type and item_id are required'}, status=400)
+
+    if item_type == 'asset':
+        if group.group_type != 'asset':
+            return Response({'error': 'Cannot move asset to a link group'}, status=400)
+        item = get_object_or_404(Asset, pk=item_id, project=group.project)
+        item.layer_group = group
+        item.save()
+        return Response({'status': 'moved', 'item_type': 'asset', 'item_id': item_id, 'group_id': pk})
+    elif item_type == 'link':
+        if group.group_type != 'link':
+            return Response({'error': 'Cannot move link to an asset group'}, status=400)
+        item = get_object_or_404(Link, pk=item_id, project=group.project)
+        item.layer_group = group
+        item.save()
+        return Response({'status': 'moved', 'item_type': 'link', 'item_id': item_id, 'group_id': pk})
+    else:
+        return Response({'error': 'item_type must be "asset" or "link"'}, status=400)
+
+
+# ============================================================================
+# Measurement Set Views
+# ============================================================================
+
+class MeasurementSetListCreate(generics.ListCreateAPIView):
+    """List and create measurement sets for a project."""
+    serializer_class = MeasurementSetSerializer
+
+    def get_queryset(self):
+        return MeasurementSet.objects.filter(project_id=self.kwargs['project_pk'])
+
+    def perform_create(self, serializer):
+        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
+        serializer.save(project=project)
+
+
+class MeasurementSetDetail(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update or delete a measurement set."""
+    queryset = MeasurementSet.objects.all()
+    serializer_class = MeasurementSetSerializer
+
+
+@api_view(['PATCH'])
+def toggle_measurement_visibility(request, pk):
+    """Toggle or set visibility of a measurement set."""
+    measurement = get_object_or_404(MeasurementSet, pk=pk)
+
+    if 'visible' in request.data:
+        measurement.visible = bool(request.data.get('visible'))
+    else:
+        measurement.visible = not measurement.visible
+
+    measurement.save()
+
+    return Response({
+        'id': measurement.id,
+        'visible': measurement.visible
     })

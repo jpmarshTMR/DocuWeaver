@@ -347,6 +347,77 @@
         background: var(--bg-asset-adjusted);
     }
 
+    /* Drag and Drop */
+    .dragging {
+        opacity: 0.5;
+    }
+
+    .drop-target-active {
+        background: #e3f2fd !important;
+        border: 2px dashed #2196f3 !important;
+    }
+
+    [data-theme="dark"] .drop-target-active {
+        background: #1a3a5a !important;
+        border: 2px dashed #4fc3f7 !important;
+    }
+
+    /* Group Item */
+    .group-item {
+        display: flex;
+        align-items: center;
+        padding: 0.5rem;
+        background: var(--bg-layer-item);
+        border-radius: 4px;
+        margin-bottom: 0.5rem;
+        cursor: pointer;
+        transition: background 0.2s, border 0.2s;
+    }
+
+    .group-item:hover {
+        background: var(--bg-layer-item-hover);
+    }
+
+    .group-item .group-icon {
+        margin-right: 0.5rem;
+        color: #ffc107;
+    }
+
+    .group-item .group-name {
+        flex: 1;
+        font-size: 0.9rem;
+    }
+
+    .group-item .group-count {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-right: 0.5rem;
+    }
+
+    .group-item .group-visibility {
+        margin-right: 0.5rem;
+        cursor: pointer;
+    }
+
+    .group-item .group-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    .group-item .group-actions button {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.75rem;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        background: var(--btn-secondary);
+        color: var(--text-primary);
+    }
+
+    .group-item .group-actions button:hover {
+        background: var(--bg-tool-btn-hover);
+    }
+
     .coordinates {
         font-size: 0.75rem;
         color: var(--text-muted);
@@ -805,28 +876,6 @@
             </div><!-- /layer-group -->
         </div>
 
-        <!-- Links Layer Group -->
-        <div class="tool-section">
-            <div class="layer-group">
-                <div class="layer-group-header" onclick="toggleLayerGroup('links')">
-                    <span class="layer-group-chevron" id="links-chevron">&#9660;</span>
-                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">Links</span>
-                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all links">
-                        <input type="checkbox" id="links-group-vis" checked onchange="toggleLinksVisibility(this.checked)">
-                    </label>
-                </div>
-                <div class="layer-group-body" id="links-group-body">
-                    <div id="link-list" style="max-height: 200px; overflow-y: auto;"></div>
-                    <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-muted);">
-                        <span id="link-count">0</span> links loaded
-                    </div>
-                    <button class="btn" style="width: 100%; margin-top: 0.5rem;" onclick="showImportLinksModal()">
-                        Import Links CSV
-                    </button>
-                </div>
-            </div>
-        </div>
-
         <div class="tool-section">
             <h4>Export</h4>
             <button class="btn btn-success" style="width: 100%;" onclick="exportProject()">
@@ -886,6 +935,8 @@
         <div class="tabs">
             <div class="tab active" data-tab="properties" onclick="showTab('properties')">Properties</div>
             <div class="tab" data-tab="assets" onclick="showTab('assets')">Assets</div>
+            <div class="tab" data-tab="links" onclick="showTab('links')">Links</div>
+            <div class="tab" data-tab="groups" onclick="showTab('groups')">Groups</div>
         </div>
 
         <div id="properties-tab" class="tab-content active">
@@ -962,6 +1013,54 @@
             </div>
             <div id="asset-list" style="max-height: 500px; overflow-y: auto;"></div>
         </div>
+
+        <div id="links-tab" class="tab-content">
+            <div style="margin-bottom: 1rem;">
+                <input type="text" id="link-search" placeholder="Search links..." style="width: 100%; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.4rem; border-radius: 4px;">
+            </div>
+            <div id="link-list" style="max-height: 500px; overflow-y: auto;"></div>
+        </div>
+
+        <div id="groups-tab" class="tab-content">
+            <div style="margin-bottom: 1rem;">
+                <button class="btn btn-success" style="width: 100%;" onclick="showCreateGroupModal('asset')">
+                    <i class="fas fa-folder-plus"></i> New Asset Group
+                </button>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <button class="btn" style="width: 100%; background: var(--btn-secondary);" onclick="showCreateGroupModal('link')">
+                    <i class="fas fa-folder-plus"></i> New Link Group
+                </button>
+            </div>
+            <h5 style="margin-bottom: 0.5rem; color: var(--text-primary);">Asset Groups</h5>
+            <div id="asset-groups-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 1rem;"></div>
+            <h5 style="margin-bottom: 0.5rem; color: var(--text-primary);">Link Groups</h5>
+            <div id="link-groups-list" style="max-height: 200px; overflow-y: auto;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Group Modal -->
+<div id="createGroupModal" class="modal">
+    <div class="modal-content">
+        <h2 style="margin-bottom: 1rem;">Create New Group</h2>
+        <form id="createGroupForm">
+            <input type="hidden" id="group-type" value="asset">
+            <div class="form-group">
+                <label>Group Name</label>
+                <input type="text" id="group-name" required placeholder="e.g., Electrical Assets">
+            </div>
+            <div class="form-group">
+                <label>Parent Group (optional)</label>
+                <select id="group-parent" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
+                    <option value="">None (Root level)</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideCreateGroupModal()">Cancel</button>
+                <button type="submit" class="btn btn-success">Create</button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -1060,63 +1159,6 @@
             <div style="display: flex; gap: 1rem; justify-content: flex-end;">
                 <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="importStepBack()">Back</button>
                 <button type="button" class="btn btn-success" onclick="importWithMapping()">Import</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Import Links CSV Modal -->
-<div id="importLinksModal" class="modal">
-    <div class="modal-content">
-        <h2 style="margin-bottom: 1rem;">Import Links from CSV</h2>
-
-        <!-- Step 1: File Selection -->
-        <div id="import-links-step-1">
-            <p class="text-muted" style="margin-bottom: 1rem;">
-                Import polyline links from a CSV file. The coordinates column should contain
-                an array of [longitude, latitude] pairs in JSON format.
-            </p>
-            <div class="form-group">
-                <label>CSV File</label>
-                <input type="file" id="import-links-csv-file" accept=".csv" required>
-            </div>
-            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideImportLinksModal()">Cancel</button>
-                <button type="button" class="btn btn-success" onclick="importLinksStepNext()">Next</button>
-            </div>
-        </div>
-
-        <!-- Step 2: Column Mapping -->
-        <div id="import-links-step-2" style="display: none;">
-            <p class="text-muted" style="margin-bottom: 0.75rem;">
-                Map CSV columns to link fields.
-            </p>
-            <div id="import-links-csv-preview" style="margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-layer-item); border-radius: 4px; font-size: 0.85rem; max-height: 60px; overflow-y: auto;"></div>
-            <div class="form-group">
-                <label>Link ID <span style="color: var(--text-required);">*</span></label>
-                <select id="map-link-id" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Coordinates <span style="color: var(--text-required);">*</span></label>
-                <select id="map-coordinates" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Name (optional)</label>
-                <select id="map-link-name" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
-                    <option value="">-- None --</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Link Type (optional)</label>
-                <select id="map-link-type" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
-                    <option value="">-- None --</option>
-                </select>
-            </div>
-            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="importLinksStepBack()">Back</button>
-                <button type="button" class="btn btn-success" onclick="importLinksWithMapping()">Import</button>
             </div>
         </div>
     </div>

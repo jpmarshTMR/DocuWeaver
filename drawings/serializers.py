@@ -1,6 +1,6 @@
 """DRF Serializers for drawings app."""
 from rest_framework import serializers
-from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ImportBatch, Link
+from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ImportBatch, Link, LayerGroup, MeasurementSet
 
 
 class AssetTypeSerializer(serializers.ModelSerializer):
@@ -66,6 +66,7 @@ class AssetSerializer(serializers.ModelSerializer):
     current_y = serializers.FloatField(read_only=True)
     delta_distance = serializers.FloatField(read_only=True)
     import_batch_name = serializers.CharField(source='import_batch.filename', read_only=True, default=None)
+    layer_group_name = serializers.CharField(source='layer_group.name', read_only=True, default=None)
 
     class Meta:
         model = Asset
@@ -74,6 +75,7 @@ class AssetSerializer(serializers.ModelSerializer):
             'original_x', 'original_y', 'adjusted_x', 'adjusted_y',
             'current_x', 'current_y', 'is_adjusted', 'delta_distance',
             'import_batch', 'import_batch_name',
+            'layer_group', 'layer_group_name',
             'metadata', 'created_at', 'updated_at'
         ]
         read_only_fields = ['project', 'is_adjusted']
@@ -129,39 +131,60 @@ class ProjectListSerializer(serializers.ModelSerializer):
 
 
 class LinkSerializer(serializers.ModelSerializer):
-    """Serializer for Link model with coordinate validation."""
-    import_batch_name = serializers.CharField(source='import_batch.filename', read_only=True, default=None)
+    """Serializer for Link polylines."""
     point_count = serializers.IntegerField(read_only=True)
+    layer_group_name = serializers.CharField(source='layer_group.name', read_only=True, default=None)
 
     class Meta:
         model = Link
         fields = [
             'id', 'project', 'link_id', 'name', 'coordinates',
             'color', 'width', 'opacity', 'link_type',
-            'metadata', 'import_batch', 'import_batch_name', 'point_count',
-            'created_at', 'updated_at'
+            'import_batch', 'layer_group', 'layer_group_name',
+            'point_count', 'metadata', 'created_at', 'updated_at'
         ]
         read_only_fields = ['project']
 
-    def validate_coordinates(self, value):
-        """Validate coordinates is a list of [lon, lat] pairs."""
-        if not isinstance(value, list):
-            raise serializers.ValidationError("Coordinates must be a list")
-        if len(value) < 2:
-            raise serializers.ValidationError("Coordinates must have at least 2 points")
 
-        for i, point in enumerate(value):
-            if not isinstance(point, (list, tuple)):
-                raise serializers.ValidationError(f"Point {i} must be a [lon, lat] array")
-            if len(point) != 2:
-                raise serializers.ValidationError(f"Point {i} must have exactly 2 values [lon, lat]")
-            try:
-                lon, lat = float(point[0]), float(point[1])
-                # Basic range validation for geographic coordinates
-                if not (-180 <= lon <= 180):
-                    raise serializers.ValidationError(f"Point {i} longitude {lon} out of range [-180, 180]")
-                if not (-90 <= lat <= 90):
-                    raise serializers.ValidationError(f"Point {i} latitude {lat} out of range [-90, 90]")
-            except (TypeError, ValueError):
-                raise serializers.ValidationError(f"Point {i} must contain numeric values")
+class LayerGroupSerializer(serializers.ModelSerializer):
+    """Serializer for layer groups with nested children."""
+    item_count = serializers.IntegerField(read_only=True)
+    total_items = serializers.IntegerField(read_only=True)
+    is_joined = serializers.BooleanField(read_only=True)
+    child_groups = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LayerGroup
+        fields = [
+            'id', 'project', 'name', 'group_type', 'color', 'visible',
+            'parent_group', 'import_batch', 'is_joined',
+            'item_count', 'total_items', 'child_groups', 'created_at'
+        ]
+        read_only_fields = ['project']
+
+    def get_child_groups(self, obj):
+        """Recursively serialize child groups."""
+        children = obj.child_groups.all()
+        return LayerGroupSerializer(children, many=True).data
+
+
+class MeasurementSetSerializer(serializers.ModelSerializer):
+    """Serializer for saved measurement sets."""
+
+    class Meta:
+        model = MeasurementSet
+        fields = [
+            'id', 'project', 'name', 'measurement_type', 'points',
+            'color', 'visible', 'total_distance_pixels', 'total_distance_meters',
+            'created_at'
+        ]
+        read_only_fields = ['project']
+
+    def validate_points(self, value):
+        """Validate points array format."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError("points must be a list")
+        for i, pt in enumerate(value):
+            if not isinstance(pt, dict) or 'x' not in pt or 'y' not in pt:
+                raise serializers.ValidationError(f"points[{i}] must have x and y")
         return value

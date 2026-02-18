@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from django.db import transaction
-from ..models import Asset, AssetType, ImportBatch, Link
+from ..models import Asset, AssetType, ImportBatch, Link, LayerGroup
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,15 @@ def import_assets_from_csv(project, csv_file, column_mapping=None, filename=None
             asset_count=0
         )
 
+        # Create a layer group for this import
+        group_name = batch_filename.rsplit('.', 1)[0] if '.' in batch_filename else batch_filename
+        layer_group = LayerGroup.objects.create(
+            project=project,
+            name=group_name,
+            group_type='asset',
+            import_batch=batch
+        )
+
         for row_num, row in enumerate(reader, start=2):  # Start at 2 (1-indexed + header)
             try:
                 # Extract fields using mapped column names
@@ -148,6 +157,7 @@ def import_assets_from_csv(project, csv_file, column_mapping=None, filename=None
                         'original_y': y,
                         'metadata': metadata,
                         'import_batch': batch,
+                        'layer_group': layer_group,
                     }
                 )
 
@@ -169,6 +179,12 @@ def import_assets_from_csv(project, csv_file, column_mapping=None, filename=None
         # Update batch asset count
         batch.asset_count = results['created'] + results['updated']
         batch.save(update_fields=['asset_count'])
+
+        # Add layer group info to results
+        results['layer_group'] = {
+            'id': layer_group.id,
+            'name': layer_group.name
+        }
 
     logger.info("CSV import for project %d: %d created, %d updated, %d errors",
                 project.pk, results['created'], results['updated'], len(results['errors']))
@@ -305,6 +321,15 @@ def import_links_from_csv(project, csv_file, column_mapping=None, filename=None)
             asset_count=0  # Will update with link count
         )
 
+        # Create a layer group for this import
+        group_name = batch_filename.rsplit('.', 1)[0] if '.' in batch_filename else batch_filename
+        layer_group = LayerGroup.objects.create(
+            project=project,
+            name=group_name,
+            group_type='link',
+            import_batch=batch
+        )
+
         for row_num, row in enumerate(reader, start=2):
             try:
                 link_id = row.get(col_id, '').strip()
@@ -362,6 +387,7 @@ def import_links_from_csv(project, csv_file, column_mapping=None, filename=None)
                         'link_type': link_type,
                         'metadata': metadata,
                         'import_batch': batch,
+                        'layer_group': layer_group,
                     }
                 )
 
@@ -382,6 +408,12 @@ def import_links_from_csv(project, csv_file, column_mapping=None, filename=None)
         # Update batch count
         batch.asset_count = results['created'] + results['updated']
         batch.save(update_fields=['asset_count'])
+
+        # Add layer group info to results
+        results['layer_group'] = {
+            'id': layer_group.id,
+            'name': layer_group.name
+        }
 
     logger.info("Link CSV import for project %d: %d created, %d updated, %d errors",
                 project.pk, results['created'], results['updated'], len(results['errors']))
