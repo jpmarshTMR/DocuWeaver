@@ -559,7 +559,7 @@ class LayerGroupListCreate(generics.ListCreateAPIView):
         queryset = LayerGroup.objects.filter(project_id=self.kwargs['project_pk'])
         # Filter by group_type if specified
         group_type = self.request.query_params.get('type')
-        if group_type in ('asset', 'link'):
+        if group_type in ('asset', 'link', 'sheet'):
             queryset = queryset.filter(group_type=group_type)
         # By default, only return top-level groups (those without parents)
         if self.request.query_params.get('top_level', 'true').lower() == 'true':
@@ -650,9 +650,9 @@ def toggle_group_visibility(request, pk):
 
 @api_view(['PATCH'])
 def move_item_to_group(request, pk):
-    """Move an asset or link to a different group."""
+    """Move an asset, link, or sheet to a different group."""
     group = get_object_or_404(LayerGroup, pk=pk)
-    item_type = request.data.get('item_type')  # 'asset' or 'link'
+    item_type = request.data.get('item_type')  # 'asset', 'link', or 'sheet'
     item_id = request.data.get('item_id')
 
     if not item_type or not item_id:
@@ -672,15 +672,22 @@ def move_item_to_group(request, pk):
         item.layer_group = group
         item.save()
         return Response({'status': 'moved', 'item_type': 'link', 'item_id': item_id, 'group_id': pk})
+    elif item_type == 'sheet':
+        if group.group_type != 'sheet':
+            return Response({'error': 'Cannot move sheet to a non-sheet group'}, status=400)
+        item = get_object_or_404(Sheet, pk=item_id, project=group.project)
+        item.layer_group = group
+        item.save()
+        return Response({'status': 'moved', 'item_type': 'sheet', 'item_id': item_id, 'group_id': pk})
     else:
-        return Response({'error': 'item_type must be "asset" or "link"'}, status=400)
+        return Response({'error': 'item_type must be "asset", "link", or "sheet"'}, status=400)
 
 
 @api_view(['POST'])
 def assign_ungrouped_to_group(request, pk):
     """Assign all ungrouped items of a type to this group."""
     group = get_object_or_404(LayerGroup, pk=pk)
-    item_type = request.data.get('item_type')  # 'asset' or 'link'
+    item_type = request.data.get('item_type')  # 'asset', 'link', or 'sheet'
 
     if not item_type:
         return Response({'error': 'item_type is required'}, status=400)
@@ -695,8 +702,13 @@ def assign_ungrouped_to_group(request, pk):
             return Response({'error': 'Cannot assign links to an asset group'}, status=400)
         count = Link.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
         return Response({'status': 'assigned', 'count': count, 'item_type': 'link'})
+    elif item_type == 'sheet':
+        if group.group_type != 'sheet':
+            return Response({'error': 'Cannot assign sheets to a non-sheet group'}, status=400)
+        count = Sheet.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
+        return Response({'status': 'assigned', 'count': count, 'item_type': 'sheet'})
     else:
-        return Response({'error': 'item_type must be "asset" or "link"'}, status=400)
+        return Response({'error': 'item_type must be "asset", "link", or "sheet"'}, status=400)
 
 
 @api_view(['POST'])
@@ -706,6 +718,8 @@ def ungroup_all_items(request, pk):
 
     if group.group_type == 'asset':
         count = Asset.objects.filter(layer_group=group).update(layer_group=None)
+    elif group.group_type == 'sheet':
+        count = Sheet.objects.filter(layer_group=group).update(layer_group=None)
     else:
         count = Link.objects.filter(layer_group=group).update(layer_group=None)
 

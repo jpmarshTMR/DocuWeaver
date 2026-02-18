@@ -51,6 +51,15 @@ class Sheet(models.Model):
     )
     page_number = models.PositiveIntegerField(default=1, help_text="Page number within the PDF")
 
+    # Layer group for organizing sheets into folders
+    layer_group = models.ForeignKey(
+        'LayerGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sheets_in_group'
+    )
+
     # Rendered image cache
     rendered_image = models.ImageField(upload_to='rendered/', blank=True, null=True)
     image_width = models.PositiveIntegerField(default=0)
@@ -339,6 +348,7 @@ class LayerGroup(models.Model):
     GROUP_TYPE_CHOICES = [
         ('asset', 'Asset Group'),
         ('link', 'Link Group'),
+        ('sheet', 'Sheet Group'),
     ]
     group_type = models.CharField(max_length=10, choices=GROUP_TYPE_CHOICES)
 
@@ -381,6 +391,8 @@ class LayerGroup(models.Model):
         """Return count of items directly in this group."""
         if self.group_type == 'asset':
             return self.assets.count()
+        elif self.group_type == 'sheet':
+            return self.sheets_in_group.count()
         else:
             return self.links_in_group.count()
 

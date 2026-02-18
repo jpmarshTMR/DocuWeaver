@@ -578,6 +578,85 @@
         margin: 4px 0;
     }
 
+    /* Import dropdown button */
+    .import-dropdown-wrapper {
+        position: relative;
+        width: 100%;
+        margin-bottom: 0.5rem;
+    }
+
+    .import-dropdown-btn {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 0.75rem;
+        background: var(--bg-btn);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: var(--text-primary);
+        transition: background 0.2s;
+    }
+
+    .import-dropdown-btn:hover {
+        background: var(--bg-layer-item-hover);
+    }
+
+    .import-dropdown-btn .dropdown-arrow {
+        font-size: 0.7rem;
+        transition: transform 0.2s;
+    }
+
+    .import-dropdown-btn.open .dropdown-arrow {
+        transform: rotate(180deg);
+    }
+
+    .import-dropdown-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: var(--bg-sidebar);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        margin-top: 4px;
+        z-index: 100;
+        display: none;
+    }
+
+    .import-dropdown-menu.open {
+        display: block;
+    }
+
+    .import-dropdown-menu .dropdown-item {
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: background 0.2s;
+    }
+
+    .import-dropdown-menu .dropdown-item:hover {
+        background: var(--bg-layer-item-hover);
+    }
+
+    .import-dropdown-menu .dropdown-item:first-child {
+        border-radius: 6px 6px 0 0;
+    }
+
+    .import-dropdown-menu .dropdown-item:last-child {
+        border-radius: 0 0 6px 6px;
+    }
+
+    .import-dropdown-menu .dropdown-icon {
+        font-size: 1rem;
+    }
+
     /* Asset/Link item in left sidebar */
     .asset-item, .link-item {
         font-size: 0.85rem;
@@ -675,28 +754,37 @@
         z-index: 10;
     }
 
-    /* Dark mode toggle floats on the canvas area */
+    /* Dark mode toggle above the floating toolbar */
     .dark-mode-toggle {
         position: absolute;
         top: 0.5rem;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 10;
+        left: 10px;
+        z-index: 11;
         display: flex;
         align-items: center;
-        gap: 0.4rem;
-        background: var(--bg-bottom-toolbar);
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        padding: 0.25rem 0.7rem;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: none;
+        border-radius: 8px;
         cursor: pointer;
-        font-size: 0.8rem;
-        color: var(--text-primary);
-        box-shadow: 0 1px 4px rgba(0,0,0,0.15);
-        transition: background 0.2s;
+        font-size: 1rem;
+        color: #fff;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        transition: background 0.2s, transform 0.2s;
+    }
+    [data-theme="dark"] .dark-mode-toggle {
+        background: rgba(22, 33, 62, 0.75);
     }
     .dark-mode-toggle:hover {
-        background: var(--bg-tool-btn-hover);
+        background: rgba(0, 0, 0, 0.7);
+        transform: scale(1.05);
+    }
+    [data-theme="dark"] .dark-mode-toggle:hover {
+        background: rgba(22, 33, 62, 0.9);
     }
 
     /* Floating tool toolbar on the canvas */
@@ -903,14 +991,6 @@
             </button>
         </div>
 
-        <!-- Display Options -->
-        <div class="tool-section">
-            <h4>👁️ Display</h4>
-            <button class="tool-btn" id="pdf-invert-toggle" onclick="togglePdfInvert()" title="Invert PDF colors (useful for dark mode)">
-                ☾ Invert PDF
-            </button>
-        </div>
-
         <!-- Measure Panel (shown/hidden by floating toolbar measure button) -->
         <div class="tool-section" id="measure-section" style="display: none;">
             <h4>📐 Measurement</h4>
@@ -945,6 +1025,30 @@
             </button>
         </div>
 
+        <!-- Import/Add Dropdown -->
+        <div class="tool-section">
+            <div class="import-dropdown-wrapper">
+                <button class="import-dropdown-btn" onclick="toggleImportDropdown(this)">
+                    <span>➕ Import / Add</span>
+                    <span class="dropdown-arrow">▼</span>
+                </button>
+                <div class="import-dropdown-menu" id="import-dropdown-menu">
+                    <div class="dropdown-item" onclick="showUploadModal(); closeImportDropdown();">
+                        <span class="dropdown-icon">📄</span>
+                        <span>Add Sheet (PDF)</span>
+                    </div>
+                    <div class="dropdown-item" onclick="showImportModal(); closeImportDropdown();">
+                        <span class="dropdown-icon">📍</span>
+                        <span>Import Assets CSV</span>
+                    </div>
+                    <div class="dropdown-item" onclick="showImportLinksModal(); closeImportDropdown();">
+                        <span class="dropdown-icon">🔗</span>
+                        <span>Import Links CSV</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Layers -->
         <div class="tool-section">
             <div class="layer-group">
@@ -956,10 +1060,10 @@
                     </label>
                 </div>
                 <div class="layer-group-body" id="sheets-group-body">
-                    <div id="sheet-layers"></div>
-                    <button class="btn" style="width: 100%; margin-top: 0.5rem;" onclick="showUploadModal()">
-                        + Add Sheet
+                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem; margin-bottom: 0.5rem;" onclick="showCreateGroupModal('sheet')">
+                        📁 New Folder
                     </button>
+                    <div id="sheet-layers"></div>
                 </div>
             </div>
         </div>
@@ -984,9 +1088,6 @@
                     </button>
                     
                     <div id="import-batches"></div>
-                    <button class="btn" style="width: 100%;" onclick="showImportModal()">
-                        Import CSV
-                    </button>
                     <button class="tool-btn" style="margin-top: 0.5rem;" onclick="toggleVerifyPanel()">
                         Verify & Plot
                     </button>
@@ -1070,9 +1171,6 @@
                     </button>
                     
                     <div id="link-import-batches"></div>
-                    <button class="btn" style="width: 100%;" onclick="showImportLinksModal()">
-                        Import Links CSV
-                    </button>
                 </div><!-- /links-group-body -->
             </div><!-- /layer-group -->
         </div>
@@ -1091,8 +1189,10 @@
     <!-- Main Canvas Area -->
     <div class="canvas-area">
         <button class="sidebar-toggle right-toggle-btn" onclick="toggleRightSidebar()" title="Toggle properties panel">&raquo;</button>
-        <button class="dark-mode-toggle" id="dark-mode-toggle" onclick="toggleTheme()" title="Toggle dark mode">
-            <span id="dark-mode-icon">☽</span> <span id="dark-mode-label">Dark Mode</span>
+
+        <!-- Dark Mode Toggle - Above floating toolbar -->
+        <button class="dark-mode-toggle" id="dark-mode-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <span id="dark-mode-icon">🌙</span>
         </button>
 
         <!-- Floating Tool Toolbar -->
@@ -1372,18 +1472,39 @@
 </script>
 <script src="{% static 'js/canvas_editor.js' %}"></script>
 <script>
-    // Sync dark mode toggle on load and changes
+    // Sync dark mode toggle icon and auto-invert PDFs
     (function(){
         function updateDarkModeToggle(theme) {
             var icon = document.getElementById('dark-mode-icon');
-            var label = document.getElementById('dark-mode-label');
-            if (icon) icon.textContent = (theme === 'dark') ? '\u2600' : '\u263D';
-            if (label) label.textContent = (theme === 'dark') ? 'Light Mode' : 'Dark Mode';
+            // Sun for dark mode (to switch to light), Moon for light mode (to switch to dark)
+            if (icon) icon.textContent = (theme === 'dark') ? '☀️' : '🌙';
         }
+        
+        function syncPdfInversionWithTheme(theme) {
+            // Auto-invert PDFs when in dark mode
+            if (typeof isPdfInverted !== 'undefined' && typeof applyPdfInversion === 'function') {
+                var shouldInvert = (theme === 'dark');
+                if (isPdfInverted !== shouldInvert) {
+                    isPdfInverted = shouldInvert;
+                    applyPdfInversion();
+                }
+            }
+        }
+        
         var t = localStorage.getItem('docuweaver-theme') || 'light';
         updateDarkModeToggle(t);
+        
+        // Listen for theme changes
         window.addEventListener('themechange', function(e) {
             updateDarkModeToggle(e.detail.theme);
+            syncPdfInversionWithTheme(e.detail.theme);
+        });
+        
+        // Sync PDF inversion when canvas is ready
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                syncPdfInversionWithTheme(localStorage.getItem('docuweaver-theme') || 'light');
+            }, 500);
         });
     })();
 </script>

@@ -26,6 +26,7 @@ class SheetSerializer(serializers.ModelSerializer):
             'rendered_image', 'rendered_image_url', 'image_width', 'image_height',
             'cuts_json',
             'offset_x', 'offset_y', 'rotation', 'z_index',
+            'layer_group',
             'join_marks', 'created_at'
         ]
         read_only_fields = ['project', 'rendered_image', 'image_width', 'image_height']

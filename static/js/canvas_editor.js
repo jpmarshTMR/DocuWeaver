@@ -20,6 +20,41 @@ function getCSRFToken() {
     return cookieValue;
 }
 
+// Import/Add dropdown functions
+function toggleImportDropdown(btn) {
+    const menu = document.getElementById('import-dropdown-menu');
+    const isOpen = menu.classList.contains('open');
+    
+    // Close the dropdown
+    if (isOpen) {
+        closeImportDropdown();
+    } else {
+        // Open the dropdown
+        btn.classList.add('open');
+        menu.classList.add('open');
+        
+        // Close when clicking outside
+        setTimeout(() => {
+            document.addEventListener('click', closeImportDropdownOnClickOutside);
+        }, 10);
+    }
+}
+
+function closeImportDropdown() {
+    const menu = document.getElementById('import-dropdown-menu');
+    const btn = document.querySelector('.import-dropdown-btn');
+    if (menu) menu.classList.remove('open');
+    if (btn) btn.classList.remove('open');
+    document.removeEventListener('click', closeImportDropdownOnClickOutside);
+}
+
+function closeImportDropdownOnClickOutside(e) {
+    const wrapper = document.querySelector('.import-dropdown-wrapper');
+    if (wrapper && !wrapper.contains(e.target)) {
+        closeImportDropdown();
+    }
+}
+
 // State
 let canvas = null;
 let currentMode = 'pan';
@@ -62,6 +97,7 @@ let isPdfInverted = false;
 // Layer group and measurement set state
 let assetGroups = [];  // Asset layer groups
 let linkGroups = [];   // Link layer groups
+let sheetGroups = [];  // Sheet layer groups
 let measurementSets = [];  // Saved measurement sets
 let groupVisibility = {};  // { groupId: boolean } visibility cache
 let draggedItem = null;  // For drag-and-drop between groups
@@ -249,10 +285,12 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('asset-rotation-slider').value = assetRotationDeg;
     document.getElementById('asset-rotation-input').value = assetRotationDeg;
 
-    // Initialize theme/invert state
-    isPdfInverted = (localStorage.getItem('docuweaver-pdf-invert') === 'true');
+    // Initialize theme state - PDF inversion is tied to dark mode
+    var currentTheme = document.documentElement.getAttribute('data-theme') || 
+                       localStorage.getItem('docuweaver-theme') || 'light';
+    isPdfInverted = (currentTheme === 'dark');
     applyCanvasTheme();
-    updatePdfInvertButton();
+    
     window.addEventListener('themechange', function() {
         applyCanvasTheme();
     });
@@ -384,6 +422,16 @@ function setupCanvasEvents() {
         // Handle split end
         if (currentMode === 'split' && isSplitting) {
             handleSplitEnd(opt);
+        }
+    });
+
+    // Right-click to finish multi-line measurement
+    canvas.upperCanvasEl.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        if (currentMode === 'measure' && measureMode === 'multi' && measurePoints.length >= 2) {
+            // Finish the measurement - remove preview and keep what we have
+            removeMeasurePreview();
+            canvas.renderAll();
         }
     });
 
@@ -665,36 +713,8 @@ async function loadProjectData() {
 }
 
 function renderSheetLayers() {
-    const container = document.getElementById('sheet-layers');
-    container.innerHTML = '';
-
-    sheets.forEach(sheet => {
-        const div = document.createElement('div');
-        div.className = 'layer-item';
-        div.dataset.sheetId = sheet.id;
-
-        // Security: Use DOM methods instead of innerHTML to prevent XSS
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'layer-visibility';
-        checkbox.checked = true;
-        checkbox.addEventListener('change', function() {
-            toggleSheetVisibility(sheet.id, this.checked);
-        });
-
-        const span = document.createElement('span');
-        span.textContent = sheet.name;  // Safe: textContent escapes HTML
-
-        div.appendChild(checkbox);
-        div.appendChild(span);
-
-        div.addEventListener('click', (e) => {
-            if (e.target.type !== 'checkbox') {
-                selectSheet(sheet.id);
-            }
-        });
-        container.appendChild(div);
-    });
+    // Now uses folder structure
+    renderSheetGroupList();
 }
 
 function renderAssetList() {
@@ -2759,8 +2779,16 @@ async function saveViewportRotation() {
 
 function updateCursorPosition(opt) {
     const pointer = canvas.getPointer(opt.e);
+    const ppm = PROJECT_DATA.pixels_per_meter;
+    
+    // If scale not calibrated, show pixel coordinates
+    if (!ppm || !isFinite(ppm) || ppm <= 0) {
+        document.getElementById('cursor-position').textContent =
+            `${Math.round(pointer.x)}px, ${Math.round(pointer.y)}px`;
+        return;
+    }
+    
     const pos = pixelToAssetMeter(pointer.x, pointer.y);
-
     document.getElementById('cursor-position').textContent =
         `${pos.x.toFixed(2)}m, ${pos.y.toFixed(2)}m`;
 }
@@ -3967,6 +3995,10 @@ function toggleRightSidebar() {
     const btn = document.querySelector('.right-toggle-btn');
     sidebar.classList.toggle('collapsed');
     btn.innerHTML = sidebar.classList.contains('collapsed') ? '&laquo;' : '&raquo;';
+    
+    // Toggle body class for dark mode button positioning
+    document.body.classList.toggle('right-sidebar-collapsed', sidebar.classList.contains('collapsed'));
+    
     // Resize canvas after transition
     setTimeout(resizeCanvasToFit, 220);
 }
@@ -4313,8 +4345,15 @@ function showCreateGroupModal(groupType) {
     typeInput.value = groupType;
     nameInput.value = '';
 
-    // Populate parent options
-    const groups = groupType === 'asset' ? assetGroups : linkGroups;
+    // Populate parent options based on group type
+    let groups;
+    if (groupType === 'asset') {
+        groups = assetGroups;
+    } else if (groupType === 'sheet') {
+        groups = sheetGroups;
+    } else {
+        groups = linkGroups;
+    }
     parentSelect.innerHTML = '<option value="">None (Root level)</option>';
     groups.forEach(g => {
         const opt = document.createElement('option');
@@ -4396,8 +4435,14 @@ async function loadLayerGroups() {
             linkGroups = await linkResp.json();
         }
 
+        // Load sheet groups
+        const sheetResp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=sheet`);
+        if (sheetResp.ok) {
+            sheetGroups = await sheetResp.json();
+        }
+
         // Initialize visibility from loaded data
-        [...assetGroups, ...linkGroups].forEach(g => {
+        [...assetGroups, ...linkGroups, ...sheetGroups].forEach(g => {
             groupVisibility[g.id] = g.visible;
         });
 
@@ -4413,6 +4458,7 @@ async function loadLayerGroups() {
 function renderLayerGroupsUI() {
     renderAssetGroupList();
     renderLinkGroupList();
+    renderSheetGroupList();
 }
 
 /**
@@ -4427,9 +4473,11 @@ function renderAssetGroupList() {
     // Count ungrouped assets
     const ungroupedAssets = assets.filter(a => !a.layer_group);
     
-    // Create "Ungrouped" folder first
-    const ungroupedDiv = createUngroupedFolder('asset', ungroupedAssets.length);
-    container.appendChild(ungroupedDiv);
+    // Only show "Ungrouped" folder if there are ungrouped items
+    if (ungroupedAssets.length > 0) {
+        const ungroupedDiv = createUngroupedFolder('asset', ungroupedAssets.length);
+        container.appendChild(ungroupedDiv);
+    }
 
     // Render user-created groups (only root level, children rendered recursively)
     const rootGroups = assetGroups.filter(g => !g.parent_group);
@@ -4451,9 +4499,11 @@ function renderLinkGroupList() {
     // Count ungrouped links
     const ungroupedLinks = links.filter(l => !l.layer_group);
     
-    // Create "Ungrouped" folder first
-    const ungroupedDiv = createUngroupedFolder('link', ungroupedLinks.length);
-    container.appendChild(ungroupedDiv);
+    // Only show "Ungrouped" folder if there are ungrouped items
+    if (ungroupedLinks.length > 0) {
+        const ungroupedDiv = createUngroupedFolder('link', ungroupedLinks.length);
+        container.appendChild(ungroupedDiv);
+    }
 
     // Render user-created groups (only root level, children rendered recursively)
     const rootGroups = linkGroups.filter(g => !g.parent_group);
@@ -4461,6 +4511,113 @@ function renderLinkGroupList() {
         const div = createGroupItem(group, 'link', 0);
         container.appendChild(div);
     });
+}
+
+/**
+ * Render sheet groups in the sidebar (folder structure for sheets)
+ */
+function renderSheetGroupList() {
+    const container = document.getElementById('sheet-layers');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // Check if there are any sheet groups created
+    const hasSheetGroups = sheetGroups && sheetGroups.length > 0;
+    
+    // Count ungrouped sheets
+    const ungroupedSheets = sheets.filter(s => !s.layer_group);
+    
+    if (hasSheetGroups) {
+        // Show folder structure if groups exist
+        if (ungroupedSheets.length > 0) {
+            const ungroupedDiv = createUngroupedFolder('sheet', ungroupedSheets.length);
+            container.appendChild(ungroupedDiv);
+        }
+
+        // Render user-created groups (only root level, children rendered recursively)
+        const rootGroups = sheetGroups.filter(g => !g.parent_group);
+        rootGroups.forEach(group => {
+            const div = createGroupItem(group, 'sheet', 0);
+            container.appendChild(div);
+        });
+    } else {
+        // No sheet groups exist - show sheets directly without folder structure
+        sheets.forEach(sheet => {
+            const div = document.createElement('div');
+            div.className = 'layer-item';
+            div.dataset.sheetId = sheet.id;
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'layer-visibility';
+            checkbox.checked = true;
+            checkbox.addEventListener('change', function() {
+                toggleSheetVisibility(sheet.id, this.checked);
+            });
+
+            const span = document.createElement('span');
+            span.textContent = sheet.name;
+
+            div.appendChild(checkbox);
+            div.appendChild(span);
+
+            div.addEventListener('click', (e) => {
+                if (e.target.type !== 'checkbox') {
+                    selectSheet(sheet.id);
+                }
+            });
+            container.appendChild(div);
+        });
+    }
+}
+
+/**
+ * Create a sheet item element for display in folders
+ */
+function createSheetItem(sheet) {
+    const div = document.createElement('div');
+    div.className = 'folder-item-entry sheet-item';
+    div.dataset.sheetId = sheet.id;
+    div.draggable = true;
+
+    // Checkbox for visibility
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'layer-visibility';
+    checkbox.checked = true;
+    checkbox.addEventListener('change', function(e) {
+        e.stopPropagation();
+        toggleSheetVisibility(sheet.id, this.checked);
+    });
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'item-name';
+    nameSpan.textContent = sheet.name;
+
+    div.appendChild(checkbox);
+    div.appendChild(nameSpan);
+
+    // Click to select sheet
+    div.addEventListener('click', (e) => {
+        if (e.target.type !== 'checkbox') {
+            selectSheet(sheet.id);
+        }
+    });
+
+    // Drag handlers for moving between folders
+    div.addEventListener('dragstart', (e) => {
+        draggedItem = { type: 'sheet', id: sheet.id, element: div };
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => div.classList.add('dragging'), 0);
+    });
+
+    div.addEventListener('dragend', () => {
+        div.classList.remove('dragging');
+        draggedItem = null;
+    });
+
+    return div;
 }
 
 /**
@@ -4532,12 +4689,19 @@ function createUngroupedFolder(type, count) {
     itemsList.className = 'folder-items' + (count > 10 ? ' collapsed' : '');
     
     // Show items in this ungrouped folder
-    const items = type === 'asset' 
-        ? assets.filter(a => !a.layer_group)
-        : links.filter(l => !l.layer_group);
+    let items;
+    if (type === 'asset') {
+        items = assets.filter(a => !a.layer_group);
+    } else if (type === 'sheet') {
+        items = sheets.filter(s => !s.layer_group);
+    } else {
+        items = links.filter(l => !l.layer_group);
+    }
     
     items.forEach(item => {
-        const itemDiv = createFolderItemElement(item, type);
+        const itemDiv = type === 'sheet' 
+            ? createSheetItem(item) 
+            : createFolderItemElement(item, type);
         itemsList.appendChild(itemDiv);
     });
 
@@ -4665,12 +4829,19 @@ function createGroupItem(group, type, depth = 0) {
     }
 
     // Render items in this group
-    const groupItems = type === 'asset'
-        ? assets.filter(a => a.layer_group === group.id)
-        : links.filter(l => l.layer_group === group.id);
+    let groupItems;
+    if (type === 'asset') {
+        groupItems = assets.filter(a => a.layer_group === group.id);
+    } else if (type === 'sheet') {
+        groupItems = sheets.filter(s => s.layer_group === group.id);
+    } else {
+        groupItems = links.filter(l => l.layer_group === group.id);
+    }
     
     groupItems.forEach(item => {
-        const itemDiv = createFolderItemElement(item, type);
+        const itemDiv = type === 'sheet' 
+            ? createSheetItem(item) 
+            : createFolderItemElement(item, type);
         folderContent.appendChild(itemDiv);
     });
 
@@ -4749,10 +4920,15 @@ function showFolderSettingsMenu(group, type, anchorEl) {
     const menu = document.createElement('div');
     menu.className = 'folder-settings-menu';
 
-    // Get ungrouped count
-    const ungroupedItems = type === 'asset'
-        ? assets.filter(a => !a.layer_group)
-        : links.filter(l => !l.layer_group);
+    // Get ungrouped count based on type
+    let ungroupedItems;
+    if (type === 'asset') {
+        ungroupedItems = assets.filter(a => !a.layer_group);
+    } else if (type === 'sheet') {
+        ungroupedItems = sheets.filter(s => !s.layer_group);
+    } else {
+        ungroupedItems = links.filter(l => !l.layer_group);
+    }
 
     // Menu options
     const options = [
@@ -4833,9 +5009,14 @@ function showFolderSettingsMenu(group, type, anchorEl) {
  * Assign all ungrouped items to a group
  */
 async function assignAllUngroupedToGroup(groupId, type) {
-    const items = type === 'asset'
-        ? assets.filter(a => !a.layer_group)
-        : links.filter(l => !l.layer_group);
+    let items;
+    if (type === 'asset') {
+        items = assets.filter(a => !a.layer_group);
+    } else if (type === 'sheet') {
+        items = sheets.filter(s => !s.layer_group);
+    } else {
+        items = links.filter(l => !l.layer_group);
+    }
 
     if (items.length === 0) return;
 
@@ -4868,7 +5049,14 @@ async function assignAllUngroupedToGroup(groupId, type) {
  */
 async function removeItemFromGroup(itemType, itemId) {
     try {
-        const endpoint = itemType === 'asset' ? 'assets' : 'links';
+        let endpoint;
+        if (itemType === 'asset') {
+            endpoint = 'assets';
+        } else if (itemType === 'sheet') {
+            endpoint = 'sheets';
+        } else {
+            endpoint = 'links';
+        }
         const resp = await fetch(`/api/${endpoint}/${itemId}/`, {
             method: 'PATCH',
             headers: {
@@ -5581,6 +5769,7 @@ function clearMeasurementOverlays() {
     canvas.renderAll();
 }
 
+
 // ==================== Dark Mode & PDF Inversion ====================
 
 function applyCanvasTheme() {
@@ -5588,13 +5777,6 @@ function applyCanvasTheme() {
     var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     canvas.backgroundColor = isDark ? '#2a2a3a' : '#e0e0e0';
     canvas.renderAll();
-}
-
-function togglePdfInvert() {
-    isPdfInverted = !isPdfInverted;
-    localStorage.setItem('docuweaver-pdf-invert', isPdfInverted.toString());
-    applyPdfInversion();
-    updatePdfInvertButton();
 }
 
 /**
@@ -5619,6 +5801,7 @@ function applyFiltersPreservingSize(img) {
 }
 
 function applyPdfInversion() {
+    if (!canvas) return;
     canvas.getObjects().filter(function(obj) { return obj.sheetData; }).forEach(function(img) {
         if (!img.filters) img.filters = [];
         if (isPdfInverted) {
@@ -5634,10 +5817,3 @@ function applyPdfInversion() {
     canvas.renderAll();
 }
 
-function updatePdfInvertButton() {
-    var btn = document.getElementById('pdf-invert-toggle');
-    if (btn) {
-        btn.classList.toggle('active', isPdfInverted);
-        btn.textContent = isPdfInverted ? '\u2600 Normal PDF' : '\u263D Invert PDF';
-    }
-}
