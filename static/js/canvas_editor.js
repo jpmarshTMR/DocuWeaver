@@ -3,6 +3,26 @@
  * Uses Fabric.js for canvas manipulation
  */
 
+// IMMEDIATE FIX: Patch CanvasRenderingContext2D to fix Fabric.js 'alphabetical' textBaseline bug
+// This must run BEFORE any Fabric.js code to prevent console spam
+(function() {
+    const originalTextBaselineSetter = Object.getOwnPropertyDescriptor(
+        CanvasRenderingContext2D.prototype, 'textBaseline'
+    );
+    if (originalTextBaselineSetter && originalTextBaselineSetter.set) {
+        Object.defineProperty(CanvasRenderingContext2D.prototype, 'textBaseline', {
+            set: function(value) {
+                // Convert deprecated 'alphabetical' to valid 'alphabetic'
+                if (value === 'alphabetical') {
+                    value = 'alphabetic';
+                }
+                originalTextBaselineSetter.set.call(this, value);
+            },
+            get: originalTextBaselineSetter.get
+        });
+    }
+})();
+
 // Get CSRF token from cookies (required for Django)
 function getCSRFToken() {
     const name = 'csrftoken';
@@ -105,6 +125,17 @@ let osmEnabled = false;  // Toggle for OSM layer visibility
 let osmOpacity = 0.7;    // OSM layer opacity
 let osmZIndex = 0;       // OSM layer z-index
 let osmRefreshTimeout = null; // Timeout for debounced OSM refresh
+let osmDarkMode = false; // OSM dark mode state
+let osmCurrentZoom = null; // Track current zoom to detect zoom changes
+let osmLoadedTiles = new Map(); // Map of tile keys to { tile, zoom }
+let osmTileCache = {};   // In-memory tile cache: { 'key': 'data-url' }
+let osmTileCacheStats = {
+    maxSize: 20 * 1024 * 1024, // 20 MB max cache size
+    currentSize: 0,             // Current cache size in bytes
+    hits: 0,                    // Cache hit count
+    misses: 0,                  // Cache miss count
+    tilesToDelete: []           // Queue for tiles to delete
+};
 let measurementSets = [];  // Saved measurement sets
 let groupVisibility = {};  // { groupId: boolean } visibility cache
 let draggedItem = null;  // For drag-and-drop between groups
@@ -296,10 +327,29 @@ document.addEventListener('DOMContentLoaded', function() {
     var currentTheme = document.documentElement.getAttribute('data-theme') || 
                        localStorage.getItem('docuweaver-theme') || 'light';
     isPdfInverted = (currentTheme === 'dark');
+    osmDarkMode = (currentTheme === 'dark'); // Sync OSM dark mode
     applyCanvasTheme();
     
-    window.addEventListener('themechange', function() {
+    window.addEventListener('themechange', function(e) {
         applyCanvasTheme();
+        
+        // Update OSM dark mode and refresh tiles if OSM is enabled
+        const newTheme = e.detail.theme;
+        const newOsmDarkMode = (newTheme === 'dark');
+        
+        if (newOsmDarkMode !== osmDarkMode) {
+            osmDarkMode = newOsmDarkMode;
+            console.log(`OSM dark mode: ${osmDarkMode ? 'ON' : 'OFF'}`);
+            
+            // Refresh OSM tiles if layer is enabled
+            if (osmEnabled) {
+                console.log('Refreshing OSM tiles for theme change');
+                // For theme changes, clear tiles so new ones load with new tile server
+                clearOSMLayer();
+                osmCurrentZoom = null; // Reset zoom tracker to force re-render
+                renderOSMLayer();
+            }
+        }
     });
 });
 
@@ -325,6 +375,68 @@ function initCanvas() {
     // larger than that to render incorrectly after filter application.
     fabric.filterBackend = new fabric.Canvas2dFilterBackend();
 
+    // CRITICAL FIX: Smart viewport culling that works correctly with rotation
+    // Fabric.js default culling breaks during rotation due to incorrect bounds calculation
+    // We override with a rotation-aware version that adds a generous buffer
+    
+    // Store original isOnScreen method
+    const originalIsOnScreen = fabric.Object.prototype.isOnScreen;
+    
+    fabric.Object.prototype.isOnScreen = function(calculateCoords) {
+        // Always render sheets (they're the main content)
+        if (this.sheetData) {
+            return true;
+        }
+        
+        // Always render OSM tiles (they're managed separately with viewport-aware loading)
+        if (this.isOSMTile) {
+            return true;
+        }
+        
+        // Always render links (they can span large areas and are important)
+        if (this.isLinkObject) {
+            return true;
+        }
+        
+        // Always render measurements
+        if (this.isMeasurement || this.isMeasurementGroup) {
+            return true;
+        }
+        
+        // For other objects (assets), use smart culling
+        // Get object bounding rect
+        const objBounds = this.getBoundingRect(true, true);
+        if (!objBounds) return true;
+        
+        // Get canvas dimensions with a generous buffer (50% of canvas size on each side)
+        // This ensures smooth scrolling and accounts for rotation
+        const canvasEl = this.canvas;
+        if (!canvasEl) return true;
+        
+        const bufferX = canvasEl.width * 0.5;
+        const bufferY = canvasEl.height * 0.5;
+        
+        // Expanded viewport bounds
+        const viewportLeft = -bufferX;
+        const viewportTop = -bufferY;
+        const viewportRight = canvasEl.width + bufferX;
+        const viewportBottom = canvasEl.height + bufferY;
+        
+        // Check if object overlaps expanded viewport
+        const objLeft = objBounds.left;
+        const objTop = objBounds.top;
+        const objRight = objBounds.left + objBounds.width;
+        const objBottom = objBounds.top + objBounds.height;
+        
+        // Simple AABB intersection test
+        const isVisible = !(objRight < viewportLeft || 
+                           objLeft > viewportRight || 
+                           objBottom < viewportTop || 
+                           objTop > viewportBottom);
+        
+        return isVisible;
+    };
+
     // Override getZoom: Fabric.js returns vpt[0] which is cos(angle)*zoom,
     // collapsing to ~0 at 90° rotation. Return our tracked zoom instead.
     canvas.getZoom = function() {
@@ -345,6 +457,7 @@ function initCanvas() {
 
 function setupCanvasEvents() {
     let isPanning = false;
+    let isMiddleClickPanning = false;
     let lastPosX, lastPosY;
 
     // Track initial state for undo when interaction starts
@@ -352,7 +465,7 @@ function setupCanvasEvents() {
 
     canvas.on('mouse:down', function(opt) {
         const evt = opt.e;
-        console.log('mouse:down event, currentMode:', currentMode);
+        console.log('mouse:down event, currentMode:', currentMode, 'button:', evt.button);
 
         // Capture state at the beginning of a transformation for undo
         const target = opt.target;
@@ -365,11 +478,24 @@ function setupCanvasEvents() {
             };
         }
 
-        if (currentMode === 'pan') {
+        // Middle click (button 1) pans regardless of mode
+        if (evt.button === 1) {
+            evt.preventDefault();
+            isMiddleClickPanning = true;
+            lastPosX = evt.clientX;
+            lastPosY = evt.clientY;
+            canvas.defaultCursor = 'grabbing';
+            console.log('Middle-click panning started');
+            return;
+        }
+
+        // Left click (button 0) pans only in pan mode
+        if (currentMode === 'pan' && evt.button === 0) {
             isPanning = true;
             lastPosX = evt.clientX;
             lastPosY = evt.clientY;
             canvas.defaultCursor = 'grabbing';
+            console.log('Pan mode panning started');
         } else if (currentMode === 'calibrate') {
             handleCalibrationClick(opt);
         } else if (currentMode === 'origin') {
@@ -388,7 +514,20 @@ function setupCanvasEvents() {
     canvas.on('mouse:move', function(opt) {
         updateCursorPosition(opt);
 
+        // Handle pan mode left-click panning
         if (isPanning && currentMode === 'pan') {
+            const evt = opt.e;
+            const vpt = canvas.viewportTransform;
+            vpt[4] += evt.clientX - lastPosX;
+            vpt[5] += evt.clientY - lastPosY;
+            canvas.requestRenderAll();
+            lastPosX = evt.clientX;
+            lastPosY = evt.clientY;
+            debouncedSaveViewportState();
+        }
+
+        // Handle middle-click panning (any mode)
+        if (isMiddleClickPanning) {
             const evt = opt.e;
             const vpt = canvas.viewportTransform;
             vpt[4] += evt.clientX - lastPosX;
@@ -417,6 +556,8 @@ function setupCanvasEvents() {
 
     canvas.on('mouse:up', function(opt) {
         isPanning = false;
+        isMiddleClickPanning = false;
+        
         if (currentMode === 'pan') {
             canvas.defaultCursor = 'grab';
         }
@@ -687,18 +828,54 @@ function setMode(mode) {
 // Data Loading
 async function loadProjectData() {
     try {
-        // Load sheets
-        const sheetsResponse = await fetch(`/api/projects/${PROJECT_ID}/sheets/`);
-        sheets = await sheetsResponse.json();
+        // Load ALL data in parallel FIRST (including layer groups)
+        // This ensures group structure is known before rendering anything
+        const [sheetsResponse, assetsResponse, linksResponse, assetGroupsResponse, linkGroupsResponse, sheetGroupsResponse] = await Promise.all([
+            fetch(`/api/projects/${PROJECT_ID}/sheets/`),
+            fetch(`/api/projects/${PROJECT_ID}/assets/`),
+            fetch(`/api/projects/${PROJECT_ID}/links/`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=asset`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=link`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=sheet`)
+        ]);
 
-        // Load assets
-        const assetsResponse = await fetch(`/api/projects/${PROJECT_ID}/assets/`);
-        assets = await assetsResponse.json();
+        // Parse all responses
+        if (sheetsResponse.ok) {
+            sheets = await sheetsResponse.json();
+        }
+        if (assetsResponse.ok) {
+            assets = await assetsResponse.json();
+        }
+        if (linksResponse.ok) {
+            links = await linksResponse.json();
+        }
+        
+        // Parse layer groups
+        if (assetGroupsResponse.ok) {
+            assetGroups = await assetGroupsResponse.json();
+        }
+        if (linkGroupsResponse.ok) {
+            linkGroups = await linkGroupsResponse.json();
+        }
+        if (sheetGroupsResponse.ok) {
+            sheetGroups = await sheetGroupsResponse.json();
+        }
 
-        // Load links
-        const linksResponse = await fetch(`/api/projects/${PROJECT_ID}/links/`);
-        links = await linksResponse.json();
+        console.log('Loaded data:', {
+            sheets: sheets.length,
+            assets: assets.length,
+            links: links.length,
+            assetGroups: assetGroups.length,
+            linkGroups: linkGroups.length,
+            sheetGroups: sheetGroups.length
+        });
 
+        // Initialize visibility from loaded group data
+        [...assetGroups, ...linkGroups, ...sheetGroups].forEach(g => {
+            groupVisibility[g.id] = g.visible;
+        });
+
+        // NOW render everything with group structure already in place
         renderSheetLayers();
         renderAssetList();
         renderSheetsOnCanvas();
@@ -707,9 +884,11 @@ async function loadProjectData() {
         renderLinkList();
         renderImportBatches();
         renderLinkImportBatches();
-
-        // Load layer groups and measurement sets
-        await loadLayerGroups();
+        
+        // Render layer groups UI (groups already loaded above)
+        renderLayerGroupsUI();
+        
+        // Load measurement sets
         await loadMeasurementSets();
         renderSavedMeasurementsOnCanvas();
 
@@ -718,9 +897,13 @@ async function loadProjectData() {
         osmOpacity = PROJECT_DATA.osm_opacity || 0.7;
         osmZIndex = PROJECT_DATA.osm_z_index || 0;
         
-        // Render OSM layer if enabled
+        // Render OSM layer if enabled, but delay it to allow viewport restoration
+        // This ensures OSM renders in the correct viewport location
         if (osmEnabled) {
-            renderOSMLayer();
+            setTimeout(() => {
+                console.log('Rendering OSM layer after viewport stabilization');
+                renderOSMLayer();
+            }, 1000); // 1 second delay allows viewport restoration to complete
         }
         
         // Update OSM toggle button state
@@ -1088,11 +1271,10 @@ function renderOSMLayer() {
 
 /**
  * Render OSM layer at a specific zoom level (or auto-calculate if zoom is null).
+ * Smart rendering that preserves existing tiles and only loads/removes as needed.
+ * Key: Never remove tiles immediately - only remove them AFTER new tiles are loaded.
  */
 function renderOSMLayerAtZoom(forcedZoom) {
-    // Clear existing OSM tiles
-    clearOSMLayer();
-    
     if (!osmEnabled || !refAssetId) {
         return; // Need reference point to render OSM
     }
@@ -1106,6 +1288,7 @@ function renderOSMLayerAtZoom(forcedZoom) {
     
     // Calculate or use forced OSM zoom level
     const zoom = forcedZoom !== null ? forcedZoom : calculateOSMZoom();
+    
     console.log(`Rendering OSM at zoom level ${zoom}${forcedZoom !== null ? ' (forced)' : ' (auto)'}`);
     
     // Get canvas viewport bounds
@@ -1113,35 +1296,41 @@ function renderOSMLayerAtZoom(forcedZoom) {
     const canvasWidth = canvas.getWidth();
     const canvasHeight = canvas.getHeight();
     
-    // Transform screen coordinates to canvas world coordinates
-    // This accounts for pan and zoom
+    // Transform ALL four screen corners to canvas world coordinates
+    // This accounts for pan, zoom, AND rotation correctly
     const invVpt = fabric.util.invertTransform(vpt);
     const topLeftCanvas = fabric.util.transformPoint({ x: 0, y: 0 }, invVpt);
+    const topRightCanvas = fabric.util.transformPoint({ x: canvasWidth, y: 0 }, invVpt);
+    const bottomLeftCanvas = fabric.util.transformPoint({ x: 0, y: canvasHeight }, invVpt);
     const bottomRightCanvas = fabric.util.transformPoint({ x: canvasWidth, y: canvasHeight }, invVpt);
     
-    // Convert canvas world coordinates to lat/lon (asset coordinates)
+    // Convert all four corners to lat/lon (asset coordinates)
     const topLeft = pixelToAssetMeter(topLeftCanvas.x, topLeftCanvas.y);
+    const topRight = pixelToAssetMeter(topRightCanvas.x, topRightCanvas.y);
+    const bottomLeft = pixelToAssetMeter(bottomLeftCanvas.x, bottomLeftCanvas.y);
     const bottomRight = pixelToAssetMeter(bottomRightCanvas.x, bottomRightCanvas.y);
     
+    // Find actual bounds from all four corners (handles rotation)
+    const allLons = [topLeft.x, topRight.x, bottomLeft.x, bottomRight.x];
+    const allLats = [topLeft.y, topRight.y, bottomLeft.y, bottomRight.y];
+    const minLon = Math.min(...allLons);
+    const maxLon = Math.max(...allLons);
+    const minLat = Math.min(...allLats);
+    const maxLat = Math.max(...allLats);
+    
     // Validate coordinates are reasonable lat/lon values
-    if (!isFinite(topLeft.x) || !isFinite(topLeft.y) || 
-        !isFinite(bottomRight.x) || !isFinite(bottomRight.y) ||
-        Math.abs(topLeft.y) > 90 || Math.abs(bottomRight.y) > 90 ||
-        Math.abs(topLeft.x) > 180 || Math.abs(bottomRight.x) > 180) {
-        console.error('Invalid lat/lon coordinates for OSM:', { topLeft, bottomRight });
+    if (!isFinite(minLon) || !isFinite(maxLon) || 
+        !isFinite(minLat) || !isFinite(maxLat) ||
+        Math.abs(minLat) > 90 || Math.abs(maxLat) > 90 ||
+        Math.abs(minLon) > 180 || Math.abs(maxLon) > 180) {
+        console.error('Invalid lat/lon coordinates for OSM:', { minLat, maxLat, minLon, maxLon });
         return;
     }
     
     console.log('Viewport bounds (lat/lon):', {
-        topLeft: { lat: topLeft.y, lon: topLeft.x },
-        bottomRight: { lat: bottomRight.y, lon: bottomRight.x }
+        minLat, maxLat, minLon, maxLon,
+        corners: { topLeft, topRight, bottomLeft, bottomRight }
     });
-    
-    // topLeft/bottomRight are in [lon, lat] format (asset coordinates)
-    const minLat = Math.min(topLeft.y, bottomRight.y);
-    const maxLat = Math.max(topLeft.y, bottomRight.y);
-    const minLon = Math.min(topLeft.x, bottomRight.x);
-    const maxLon = Math.max(topLeft.x, bottomRight.x);
     
     // Get tile coordinates for the exact viewport bounds (no padding yet)
     const tileTL_noPad = latLonToTile(maxLat, minLon, zoom);
@@ -1154,14 +1343,18 @@ function renderOSMLayerAtZoom(forcedZoom) {
     
     console.log(`Base viewport coverage: ${baseTileCountX}x${baseTileCountY} = ${baseTileCount} tiles`);
     
-    // Adjust padding based on how many tiles we already need
+    // Adjust padding based on tile count and canvas rotation
+    // When rotated, we need more padding because the visible area is larger
     let tilePadding = 1;
+    const isRotated = Math.abs(viewportRotation % 90) > 0.5; // Not aligned to 90° increments
+    const rotationPaddingMultiplier = isRotated ? 1.5 : 1; // 50% more padding when rotated
+    
     if (baseTileCount > 80) {
-        tilePadding = 0; // No padding if already covering many tiles
+        tilePadding = Math.ceil(0 * rotationPaddingMultiplier); // No padding if already covering many tiles
     } else if (baseTileCount > 40) {
-        tilePadding = 1; // Minimal padding for medium coverage
+        tilePadding = Math.ceil(1 * rotationPaddingMultiplier); // Minimal padding for medium coverage
     } else {
-        tilePadding = 2; // More padding for small coverage (better panning UX)
+        tilePadding = Math.ceil(2 * rotationPaddingMultiplier); // More padding for small coverage (better panning UX)
     }
     
     const tileTL = {
@@ -1218,11 +1411,79 @@ function renderOSMLayerAtZoom(forcedZoom) {
         }
     }
     
-    // Load tiles
+    // Create set of needed tiles in viewport
+    const neededTiles = new Set();
     for (let tileX = tileTL.x; tileX <= tileBR.x; tileX++) {
         for (let tileY = tileTL.y; tileY <= tileBR.y; tileY++) {
-            loadOSMTile(tileX, tileY, zoom);
+            neededTiles.add(`${tileX}_${tileY}_${zoom}`);
         }
+    }
+    
+    // Validate existing tiles on canvas - remove any that don't match current dark mode
+    osmLoadedTiles.forEach((tileObj, tileKey) => {
+        if (tileObj.darkMode !== osmDarkMode) {
+            console.warn(`Tile ${tileKey} was loaded in ${tileObj.darkMode ? 'dark' : 'light'} mode, removing for theme mismatch`);
+            canvas.remove(tileObj.tile);
+            osmTiles = osmTiles.filter(t => t !== tileObj.tile);
+            osmLoadedTiles.delete(tileKey);
+        }
+    });
+    
+    // Check if zoom has actually changed
+    const zoomChanged = osmCurrentZoom !== null && osmCurrentZoom !== zoom;
+    if (zoomChanged) {
+        console.log(`OSM zoom changed from ${osmCurrentZoom} to ${zoom}`);
+        osmCurrentZoom = zoom;
+        
+        // Mark old zoom tiles for deletion, but don't delete yet
+        // This way they stay visible while new tiles load
+        osmLoadedTiles.forEach((tileObj, tileKey) => {
+            if (!neededTiles.has(tileKey)) {
+                tileObj.pendingDelete = true;
+                console.log(`Marking for deletion (will remove after new tiles load): ${tileKey}`);
+            }
+        });
+    } else {
+        osmCurrentZoom = zoom;
+        
+        // Same zoom level - remove tiles that are outside viewport immediately
+        osmLoadedTiles.forEach((tileObj, tileKey) => {
+            if (!neededTiles.has(tileKey)) {
+                canvas.remove(tileObj.tile);
+                osmTiles = osmTiles.filter(t => t !== tileObj.tile);
+                osmLoadedTiles.delete(tileKey);
+                console.log(`Removed off-screen tile: ${tileKey}`);
+            }
+        });
+    }
+    
+    // Load only tiles that aren't already loaded
+    let tilesLoading = 0;
+    for (let tileX = tileTL.x; tileX <= tileBR.x; tileX++) {
+        for (let tileY = tileTL.y; tileY <= tileBR.y; tileY++) {
+            const tileKey = `${tileX}_${tileY}_${zoom}`;
+            if (!osmLoadedTiles.has(tileKey)) {
+                loadOSMTile(tileX, tileY, zoom);
+                tilesLoading++;
+            }
+        }
+    }
+    
+    // If zoom changed and tiles are loading, schedule cleanup of old tiles
+    if (zoomChanged && tilesLoading > 0) {
+        // After a short delay (allowing new tiles to load), remove marked tiles
+        setTimeout(() => {
+            console.log('Cleaning up old zoom level tiles after new ones loaded');
+            osmLoadedTiles.forEach((tileObj, tileKey) => {
+                if (tileObj.pendingDelete) {
+                    canvas.remove(tileObj.tile);
+                    osmTiles = osmTiles.filter(t => t !== tileObj.tile);
+                    osmLoadedTiles.delete(tileKey);
+                    console.log(`Cleaned up: ${tileKey}`);
+                }
+            });
+            canvas.renderAll();
+        }, 200); // 200ms gives tiles time to start loading before cleanup
     }
 }
 
@@ -1230,17 +1491,67 @@ function renderOSMLayerAtZoom(forcedZoom) {
  * Load a single OSM tile and add it to the canvas.
  */
 function loadOSMTile(tileX, tileY, zoom) {
-    // OpenStreetMap tile URL (using standard tile server)
-    // Note: Please use your own tile server for production or add proper attribution
-    const url = `https://tile.openstreetmap.org/${zoom}/${tileX}/${tileY}.png`;
+    // Choose tile server based on dark mode
+    // Option 1: Different tile servers for light/dark modes
+    // Option 2: Use CSS filters to darken standard OSM tiles
+    let url;
+    const useDarkTileServer = true; // Set to false to use filters instead
     
+    if (osmDarkMode && useDarkTileServer) {
+        // CartoDB Dark Matter - professionally designed dark themed tiles
+        // Alternative providers:
+        // - Stamen Toner: `https://stamen-tiles.a.ssl.fastly.net/toner/${zoom}/${tileX}/${tileY}.png`
+        // - CARTO Dark: `https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/${zoom}/${tileX}/${tileY}.png`
+        url = `https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/${zoom}/${tileX}/${tileY}.png`;
+    } else {
+        // Standard OpenStreetMap tiles
+        url = `https://tile.openstreetmap.org/${zoom}/${tileX}/${tileY}.png`;
+    }
+    
+    // Check cache first
+    const cachedDataUrl = getOSMTileFromCache(tileX, tileY, zoom, osmDarkMode);
+    if (cachedDataUrl) {
+        // Use cached tile immediately
+        addOSMTileToCanvas(cachedDataUrl, tileX, tileY, zoom);
+        return;
+    }
+    
+    // Tile not in cache, download it
     // Get tile bounds in lat/lon
     const bounds = tileToBounds(tileX, tileY, zoom);
     
-    console.log(`Loading tile [${tileX},${tileY}] with bounds:`, {
-        lat: [bounds.latMin, bounds.latMax],
-        lon: [bounds.lonMin, bounds.lonMax]
-    });
+    console.log(`Downloading tile [${tileX},${tileY}] from ${osmDarkMode ? 'Dark' : 'Light'} server...`);
+    
+    // Load tile image from URL
+    fabric.Image.fromURL(url, function(img) {
+        if (!img.getElement()) {
+            console.warn(`Failed to load tile [${tileX},${tileY}]`);
+            return;
+        }
+        
+        // Convert to data URL and cache it
+        const canvas_temp = document.createElement('canvas');
+        canvas_temp.width = img.width;
+        canvas_temp.height = img.height;
+        const ctx = canvas_temp.getContext('2d');
+        ctx.drawImage(img.getElement(), 0, 0);
+        const dataUrl = canvas_temp.toDataURL('image/png');
+        
+        // Store in cache
+        storeOSMTileInCache(tileX, tileY, zoom, osmDarkMode, dataUrl);
+        
+        // Add to canvas
+        addOSMTileToCanvas(dataUrl, tileX, tileY, zoom);
+    }, { crossOrigin: 'anonymous' });
+}
+
+/**
+ * Add an OSM tile (from cache or fresh) to the canvas.
+ * Handles positioning, rotation, and filtering.
+ */
+function addOSMTileToCanvas(dataUrl, tileX, tileY, zoom) {
+    const bounds = tileToBounds(tileX, tileY, zoom);
+    const useDarkTileServer = true; // Must match the setting in loadOSMTile
     
     // Convert all four corners to pixel coordinates
     // This handles rotation properly
@@ -1260,19 +1571,24 @@ function loadOSMTile(tileX, tileY, zoom) {
     // Calculate rotation angle from the transformed top edge
     const angle = Math.atan2(topRight.y - topLeft.y, topRight.x - topLeft.x) * 180 / Math.PI;
     
-    console.log(`Tile [${tileX},${tileY}] canvas position:`, {
-        center: [centerX, centerY],
-        width: width,
-        height: height,
-        angle: angle,
-        assetRotation: assetRotationDeg
-    });
+    console.log(`Adding tile [${tileX},${tileY}] to canvas (cached: ${getOSMCacheStats().hitRate})`);
     
-    // Load tile image
-    fabric.Image.fromURL(url, function(img) {
+    // Load tile image from data URL
+    fabric.Image.fromURL(dataUrl, function(img) {
         if (!img.getElement()) {
-            console.warn(`Failed to load tile [${tileX},${tileY}]`);
+            console.warn(`Failed to create image from tile [${tileX},${tileY}]`);
             return;
+        }
+        
+        // Apply dark mode filter if using standard OSM tiles in dark mode
+        if (osmDarkMode && !useDarkTileServer) {
+            // Apply CSS-style filters to darken standard OSM tiles
+            img.filters = [
+                new fabric.Image.filters.Brightness({ brightness: -0.3 }),
+                new fabric.Image.filters.Contrast({ contrast: -0.1 }),
+                new fabric.Image.filters.Saturation({ saturation: -0.4 })
+            ];
+            img.applyFilters();
         }
         
         img.set({
@@ -1287,17 +1603,128 @@ function loadOSMTile(tileX, tileY, zoom) {
             selectable: false,
             evented: false,
             isOSMTile: true,
+            osmDarkMode: osmDarkMode, // Track which mode this tile was loaded in
+            osmTileLoadedAt: Date.now(), // Track when tile was loaded to detect stale tiles
             tileInfo: { x: tileX, y: tileY, zoom: zoom } // Debug info
         });
         
         canvas.add(img);
         osmTiles.push(img);
         
+        // Track that this tile is now loaded
+        const tileKey = `${tileX}_${tileY}_${zoom}`;
+        osmLoadedTiles.set(tileKey, { tile: img, zoom: zoom, darkMode: osmDarkMode, loadedAt: Date.now() });
+        
         // Set z-index ordering
         applyOSMZIndex();
         
         canvas.renderAll();
     }, { crossOrigin: 'anonymous' });
+}
+
+// ============================================================================
+// OSM Tile Cache Management
+// ============================================================================
+
+/**
+ * Generate cache key for a tile.
+ */
+function getOSMCacheKey(tileX, tileY, zoom, isDarkMode) {
+    return `osm_tile_${zoom}_${tileX}_${tileY}_${isDarkMode ? 'dark' : 'light'}`;
+}
+
+/**
+ * Get tile from cache.
+ */
+function getOSMTileFromCache(tileX, tileY, zoom, isDarkMode) {
+    const key = getOSMCacheKey(tileX, tileY, zoom, isDarkMode);
+    if (osmTileCache[key]) {
+        osmTileCacheStats.hits++;
+        console.log(`Cache HIT: ${key} (${osmTileCacheStats.hits} hits, ${osmTileCacheStats.misses} misses)`);
+        return osmTileCache[key];
+    }
+    osmTileCacheStats.misses++;
+    return null;
+}
+
+/**
+ * Store tile in cache with size management.
+ */
+function storeOSMTileInCache(tileX, tileY, zoom, isDarkMode, dataUrl) {
+    const key = getOSMCacheKey(tileX, tileY, zoom, isDarkMode);
+    
+    // Estimate size (rough approximation: data URL length)
+    const estimatedSize = dataUrl.length;
+    
+    // Check if we need to make room
+    if (osmTileCacheStats.currentSize + estimatedSize > osmTileCacheStats.maxSize) {
+        // Remove oldest/least used tiles until we have space
+        pruneOSMTileCache(estimatedSize);
+    }
+    
+    // Store tile
+    osmTileCache[key] = dataUrl;
+    osmTileCacheStats.currentSize += estimatedSize;
+    
+    // Only log cache status periodically (every ~10 tiles)
+    if (Math.random() < 0.1) {
+        console.log(`OSM Cache: ${(osmTileCacheStats.currentSize / 1024 / 1024).toFixed(2)} MB / ${(osmTileCacheStats.maxSize / 1024 / 1024).toFixed(1)} MB`);
+    }
+}
+
+/**
+ * Prune cache by removing tiles until enough space is available.
+ * Uses a simple FIFO approach (first added, first removed).
+ */
+function pruneOSMTileCache(requiredSpace) {
+    console.log(`Pruning cache: need ${(requiredSpace / 1024 / 1024).toFixed(2)} MB`);
+    
+    const cacheKeys = Object.keys(osmTileCache);
+    let freedSpace = 0;
+    let deletedCount = 0;
+    
+    // Remove tiles until we have enough space
+    for (let i = 0; i < cacheKeys.length && freedSpace < requiredSpace; i++) {
+        const key = cacheKeys[i];
+        const dataUrl = osmTileCache[key];
+        const tileSize = dataUrl.length;
+        
+        delete osmTileCache[key];
+        osmTileCacheStats.currentSize -= tileSize;
+        freedSpace += tileSize;
+        deletedCount++;
+    }
+    
+    console.log(`Pruned ${deletedCount} tiles, freed ${(freedSpace / 1024 / 1024).toFixed(2)} MB`);
+}
+
+/**
+ * Clear entire OSM tile cache.
+ */
+function clearOSMTileCache() {
+    osmTileCache = {};
+    osmTileCacheStats.currentSize = 0;
+    osmTileCacheStats.hits = 0;
+    osmTileCacheStats.misses = 0;
+    console.log('OSM tile cache cleared');
+}
+
+/**
+ * Get cache statistics.
+ */
+function getOSMCacheStats() {
+    const hitRate = osmTileCacheStats.hits + osmTileCacheStats.misses > 0 
+        ? (osmTileCacheStats.hits / (osmTileCacheStats.hits + osmTileCacheStats.misses) * 100).toFixed(1)
+        : 0;
+    
+    return {
+        size: `${(osmTileCacheStats.currentSize / 1024 / 1024).toFixed(2)} MB / ${(osmTileCacheStats.maxSize / 1024 / 1024).toFixed(1)} MB`,
+        tiles: Object.keys(osmTileCache).length,
+        hits: osmTileCacheStats.hits,
+        misses: osmTileCacheStats.misses,
+        hitRate: `${hitRate}%`,
+        cacheUtilization: `${(osmTileCacheStats.currentSize / osmTileCacheStats.maxSize * 100).toFixed(1)}%`
+    };
 }
 
 /**
@@ -1325,6 +1752,7 @@ function applyOSMZIndex() {
 function clearOSMLayer() {
     osmTiles.forEach(tile => canvas.remove(tile));
     osmTiles = [];
+    osmLoadedTiles.clear();
 }
 
 /**
@@ -1639,8 +2067,17 @@ function renderLinksOnCanvas() {
     const existingLinks = canvas.getObjects().filter(obj => obj.isLinkObject);
     existingLinks.forEach(obj => canvas.remove(obj));
 
+    console.log('renderLinksOnCanvas called:', {
+        refAssetId: refAssetId,
+        refPixelX: refPixelX,
+        refPixelY: refPixelY,
+        linksVisible: linksVisible,
+        linksCount: links.length
+    });
+
     // Only render links if a reference point has been placed
     if (!refAssetId || (refPixelX === 0 && refPixelY === 0)) {
+        console.log('Skipping link render - no reference point');
         return;
     }
 
@@ -1650,13 +2087,19 @@ function renderLinksOnCanvas() {
         return;
     }
 
+    let rendered = 0, skippedGroup = 0, skippedCoords = 0;
+    
     links.forEach(link => {
         // Check if link's group is visible
         if (link.layer_group && groupVisibility[link.layer_group] === false) {
+            skippedGroup++;
             return;  // Skip hidden group links
         }
 
-        if (!link.coordinates || link.coordinates.length < 2) return;
+        if (!link.coordinates || link.coordinates.length < 2) {
+            skippedCoords++;
+            return;
+        }
 
         // Convert coordinates to pixel positions
         const points = link.coordinates.map(coord => {
@@ -1678,10 +2121,26 @@ function renderLinksOnCanvas() {
         });
 
         canvas.add(polyline);
-        // Send links to back (below assets but above sheets)
-        polyline.sendToBack();
+        rendered++;
     });
 
+    // Position all links above sheets and OSM tiles but below assets
+    // First, find the topmost sheet/OSM object
+    const objects = canvas.getObjects();
+    let insertIndex = 0;
+    objects.forEach((obj, idx) => {
+        if (obj.sheetData || obj.isOSMTile) {
+            insertIndex = Math.max(insertIndex, idx + 1);
+        }
+    });
+    
+    // Move all link objects to just above sheets/OSM
+    const linkObjects = objects.filter(obj => obj.isLinkObject);
+    linkObjects.forEach(linkObj => {
+        canvas.moveTo(linkObj, insertIndex);
+    });
+
+    console.log('Links render result:', { rendered, skippedGroup, skippedCoords, total: links.length });
     canvas.renderAll();
 }
 
@@ -3184,7 +3643,11 @@ function applyViewportRotation() {
         obj.setCoords();
     });
 
-    canvas.requestRenderAll();
+    // Render all objects without any culling (our custom _renderObjects override handles this)
+    canvas.renderAll();
+    
+    // Refresh OSM tiles for new viewport (handles rotation correctly with 4-corner bounds)
+    debouncedRefreshOSM();
 }
 
 /**
@@ -3231,19 +3694,20 @@ async function saveViewportRotation() {
 }
 
 function updateCursorPosition(opt) {
+    const cursorEl = document.getElementById('cursor-position');
+    if (!cursorEl) return;  // Element doesn't exist, skip update
+    
     const pointer = canvas.getPointer(opt.e);
     const ppm = PROJECT_DATA.pixels_per_meter;
     
     // If scale not calibrated, show pixel coordinates
     if (!ppm || !isFinite(ppm) || ppm <= 0) {
-        document.getElementById('cursor-position').textContent =
-            `${Math.round(pointer.x)}px, ${Math.round(pointer.y)}px`;
+        cursorEl.textContent = `${Math.round(pointer.x)}px, ${Math.round(pointer.y)}px`;
         return;
     }
     
     const pos = pixelToAssetMeter(pointer.x, pointer.y);
-    document.getElementById('cursor-position').textContent =
-        `${pos.x.toFixed(2)}m, ${pos.y.toFixed(2)}m`;
+    cursorEl.textContent = `${pos.x.toFixed(2)}m, ${pos.y.toFixed(2)}m`;
 }
 
 // Tab Switching
