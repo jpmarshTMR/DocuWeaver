@@ -688,6 +688,11 @@ async function loadProjectData() {
         const linksResponse = await fetch(`/api/projects/${PROJECT_ID}/links/`);
         links = await linksResponse.json();
 
+        // Load layer groups FIRST before rendering lists
+        await loadLayerGroups();
+        await loadMeasurementSets();
+
+        // Now render with folder structure (groups already loaded)
         renderSheetLayers();
         renderAssetList();
         renderSheetsOnCanvas();
@@ -696,10 +701,6 @@ async function loadProjectData() {
         renderLinkList();
         renderImportBatches();
         renderLinkImportBatches();
-
-        // Load layer groups and measurement sets
-        await loadLayerGroups();
-        await loadMeasurementSets();
         renderSavedMeasurementsOnCanvas();
 
         // Restore reference point marker if configured

@@ -7,7 +7,10 @@
     <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
             <h2>Projects</h2>
-            <button class="btn btn-success" onclick="showCreateModal()">+ New Project</button>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn" style="background: var(--btn-secondary);" onclick="showImportModal()">📥 Import Project</button>
+                <button class="btn btn-success" onclick="showCreateModal()">+ New Project</button>
+            </div>
         </div>
 
         {% if projects %}
@@ -33,6 +36,7 @@
                     <td>
                         <a href="{% url 'drawings:editor' project.pk %}" class="btn">Open Editor</a>
                         <a href="{% url 'drawings:project_detail' project.pk %}" class="btn" style="background: var(--btn-secondary);">Details</a>
+                        <a href="{% url 'drawings:export_project' project.pk %}" class="btn" style="background: #17a2b8;" title="Export project">📤</a>
                     </td>
                 </tr>
                 {% endfor %}
@@ -65,6 +69,33 @@
     </div>
 </div>
 
+<!-- Import Project Modal -->
+<div id="importModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-modal-overlay); z-index: 1000;">
+    <div style="background: var(--bg-modal); color: var(--text-primary); max-width: 500px; margin: 100px auto; padding: 2rem; border-radius: 8px;">
+        <h2 style="margin-bottom: 1rem;">Import Project</h2>
+        <form id="importForm" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="form-group">
+                <label>Select Project File (.docuweaver)</label>
+                <input type="file" name="file" accept=".docuweaver" required style="width: 100%; padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
+                <p class="text-muted" style="font-size: 0.85rem; margin-top: 0.5rem;">
+                    Import a project that was exported from another DocuWeaver instance.
+                </p>
+            </div>
+            <div id="importProgress" style="display: none; margin-bottom: 1rem;">
+                <div style="background: var(--border-color); border-radius: 4px; height: 8px; overflow: hidden;">
+                    <div id="importProgressBar" style="background: var(--accent-color); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <p class="text-muted" style="font-size: 0.85rem; margin-top: 0.5rem; text-align: center;">Importing project...</p>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideImportModal()">Cancel</button>
+                <button type="submit" class="btn btn-success" id="importBtn">Import Project</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
 function showCreateModal() {
     document.getElementById('createModal').style.display = 'block';
@@ -72,6 +103,17 @@ function showCreateModal() {
 
 function hideCreateModal() {
     document.getElementById('createModal').style.display = 'none';
+}
+
+function showImportModal() {
+    document.getElementById('importModal').style.display = 'block';
+    document.getElementById('importProgress').style.display = 'none';
+    document.getElementById('importBtn').disabled = false;
+    document.getElementById('importForm').reset();
+}
+
+function hideImportModal() {
+    document.getElementById('importModal').style.display = 'none';
 }
 
 document.getElementById('createForm').addEventListener('submit', async (e) => {
@@ -97,10 +139,63 @@ document.getElementById('createForm').addEventListener('submit', async (e) => {
     }
 });
 
+document.getElementById('importForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const fileInput = e.target.querySelector('input[type="file"]');
+    if (!fileInput.files.length) {
+        alert('Please select a file');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    
+    // Get CSRF token
+    const csrfToken = document.querySelector('#importForm input[name="csrfmiddlewaretoken"]').value;
+    
+    // Show progress
+    document.getElementById('importProgress').style.display = 'block';
+    document.getElementById('importBtn').disabled = true;
+    document.getElementById('importProgressBar').style.width = '30%';
+    
+    try {
+        const response = await fetch('{% url "drawings:import_project" %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': csrfToken
+            },
+            body: formData
+        });
+        
+        document.getElementById('importProgressBar').style.width = '90%';
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            document.getElementById('importProgressBar').style.width = '100%';
+            alert(`Project "${data.project_name}" imported successfully!`);
+            window.location.reload();
+        } else {
+            alert(data.error || 'Error importing project');
+            hideImportModal();
+        }
+    } catch (err) {
+        alert('Error importing project: ' + err.message);
+        hideImportModal();
+    }
+});
+
 // Close modal on outside click
 document.getElementById('createModal').addEventListener('click', (e) => {
     if (e.target.id === 'createModal') {
         hideCreateModal();
+    }
+});
+
+document.getElementById('importModal').addEventListener('click', (e) => {
+    if (e.target.id === 'importModal') {
+        hideImportModal();
     }
 });
 </script>

@@ -34,6 +34,9 @@ class Project(models.Model):
     ref_pixel_x = models.FloatField(default=0.0, help_text="Pixel X where reference asset was placed on canvas")
     ref_pixel_y = models.FloatField(default=0.0, help_text="Pixel Y where reference asset was placed on canvas")
 
+    # Cadastre overlay settings
+    cadastre_color = models.CharField(max_length=7, default='#FF6600', help_text="Color for cadastre boundaries")
+
     class Meta:
         ordering = ['-created_at']
 
