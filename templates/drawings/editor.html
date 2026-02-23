@@ -500,6 +500,56 @@
         color: #dc3545;
     }
 
+    /* Header add button (compact plus icon for new folder) */
+    .header-add-btn {
+        background: none;
+        border: 1px solid var(--border-color);
+        border-radius: 3px;
+        width: 20px;
+        height: 20px;
+        font-size: 14px;
+        font-weight: bold;
+        line-height: 1;
+        cursor: pointer;
+        color: var(--text-muted);
+        margin-right: 4px;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .header-add-btn:hover {
+        background: var(--bg-tool-btn-active);
+        color: white;
+        border-color: var(--bg-tool-btn-active);
+    }
+
+    /* Drag handle for sortable sections */
+    .drag-handle {
+        cursor: grab;
+        color: var(--text-muted);
+        font-size: 10px;
+        letter-spacing: -2px;
+        padding: 0 4px;
+        opacity: 0.5;
+        transition: opacity 0.2s;
+        user-select: none;
+    }
+    .drag-handle:hover {
+        opacity: 1;
+    }
+    .drag-handle:active {
+        cursor: grabbing;
+    }
+    .sortable-layer-section.dragging {
+        opacity: 0.5;
+        background: var(--bg-layer-item-hover);
+    }
+    .sortable-layer-section.drag-over {
+        border-top: 2px solid var(--bg-tool-btn-active);
+    }
+
     .folder-content, .folder-items {
         width: 100%;
         padding-left: 20px;
@@ -526,6 +576,17 @@
 
     .folder-item-entry.dragging {
         opacity: 0.5;
+    }
+    
+    /* Folder drag styling */
+    .folder-item.dragging, .group-item.dragging {
+        opacity: 0.5;
+        border: 1px dashed var(--text-muted);
+    }
+
+    .folder-item-entry.selected-measurement {
+        background: rgba(0, 188, 212, 0.3);
+        border: 1px solid #00bcd4;
     }
 
     /* Global folder styling */
@@ -1033,22 +1094,30 @@
             </div>
         </div>
 
-        <!-- Scale Controls -->
-        <div class="tool-section">
-            <h4>⚖️ Scale</h4>
-            <button class="tool-btn" onclick="bringToScale()" title="Zoom to fit all sheets at their real-world scale">
-                📊 Bring to Scale
-            </button>
-        </div>
-
         <!-- Measure Panel (shown/hidden by floating toolbar measure button) -->
         <div class="tool-section" id="measure-section" style="display: none;">
-            <h4>📐 Measurement</h4>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <h4 style="margin: 0;">📐 Measurement</h4>
+                <button class="header-add-btn" style="display: flex; align-items: center; justify-content: center;" 
+                        onclick="showMeasurementConfigModal()" title="Measurement Settings">
+                    <span style="font-size: 12px; line-height: 1;">⚙️</span>
+                </button>
+            </div>
             <div id="measure-scale-warning" style="display: none; margin-bottom: 0.5rem; padding: 0.4rem; background: var(--bg-warning); border: 1px solid var(--border-warning); border-radius: 4px; font-size: 0.8rem; color: var(--text-warning);">
                 Scale not calibrated. Distances shown in pixels only.
             </div>
+            
+            <!-- Config Type Selector -->
             <div style="margin-bottom: 0.5rem;">
-                <label style="font-size: 0.8rem; color: var(--text-muted);">Measurement Type</label>
+                <label style="font-size: 0.8rem; color: var(--text-muted);">Style Preset</label>
+                <select id="measure-config-type" style="width: 100%; padding: 0.3rem; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; background: var(--bg-input); color: var(--text-primary); margin-top: 0.25rem;"
+                        onchange="onMeasureConfigTypeChange(this.value)">
+                    <!-- Options populated by JS -->
+                </select>
+            </div>
+            
+            <div style="margin-bottom: 0.5rem;">
+                <label style="font-size: 0.8rem; color: var(--text-muted);">Measurement Mode</label>
                 <div style="display: flex; gap: 0.75rem; margin-top: 0.25rem;">
                     <label style="font-size: 0.85rem; font-weight: normal; cursor: pointer;">
                         <input type="radio" name="measure-type" value="single" checked
@@ -1105,30 +1174,52 @@
             </div>
         </div>
 
+        <!-- Sortable Layers Container -->
+        <div id="layers-container">
         <!-- Layers -->
-        <div class="tool-section">
+        <div class="tool-section sortable-layer-section" data-section="sheets">
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('sheets')">
+                    <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
                     <span class="layer-group-chevron" id="sheets-chevron">&#9660;</span>
                     <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📄 Sheets</span>
+                    <button class="header-add-btn" onclick="event.stopPropagation(); showCreateGroupModal('sheet');" title="New Folder">+</button>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all sheets">
                         <input type="checkbox" id="sheets-group-vis" checked onchange="toggleGroupVisibility('sheets', this.checked)">
                     </label>
                 </div>
                 <div class="layer-group-body" id="sheets-group-body">
-                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem; margin-bottom: 0.5rem;" onclick="showCreateGroupModal('sheet')">
-                        📁 New Folder
-                    </button>
                     <div id="sheet-layers"></div>
                 </div>
             </div>
         </div>
 
-        <div class="tool-section">
+        <!-- Measurements Layer Group - Before Assets/Links for better visibility -->
+        <div class="tool-section sortable-layer-section" data-section="measurements">
+            <div class="layer-group">
+                <div class="layer-group-header" onclick="toggleLayerGroup('measurements')">
+                    <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+                    <span class="layer-group-chevron" id="measurements-chevron">&#9660;</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📐 Measurements</span>
+                    <button class="header-add-btn" onclick="event.stopPropagation(); showCreateGroupModal('measurement');" title="New Folder">+</button>
+                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all measurements">
+                        <input type="checkbox" id="measurements-group-vis" checked onchange="toggleGroupVisibility('measurements', this.checked)">
+                    </label>
+                </div>
+                <div class="layer-group-body" id="measurements-group-body">
+                    <!-- Measurement Groups (includes Ungrouped folder) -->
+                    <div id="measurement-groups-list" style="max-height: 300px; overflow-y: auto;"></div>
+                </div><!-- /measurements-group-body -->
+            </div><!-- /layer-group -->
+        </div>
+
+        <div class="tool-section sortable-layer-section" data-section="assets">
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('assets')">
+                    <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
                     <span class="layer-group-chevron" id="assets-chevron">&#9660;</span>
                     <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📍 Assets</span>
+                    <button class="header-add-btn" onclick="event.stopPropagation(); showCreateGroupModal('asset');" title="New Folder">+</button>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all assets">
                         <input type="checkbox" id="assets-group-vis" checked onchange="toggleGroupVisibility('assets', this.checked)">
                     </label>
@@ -1138,10 +1229,7 @@
                            style="width: 100%; padding: 0.3rem; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem; background: var(--bg-input); color: var(--text-primary);">
                     
                     <!-- Asset Groups (includes Ungrouped folder) -->
-                    <div id="asset-groups-list" style="max-height: 300px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
-                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem; margin-bottom: 0.5rem;" onclick="showCreateGroupModal('asset')">
-                        + New Folder
-                    </button>
+                    <div id="asset-groups-list" style="max-height: 300px; overflow-y: auto;"></div>
                     
                     <div id="import-batches"></div>
                     <button class="tool-btn" style="margin-top: 0.5rem;" onclick="toggleVerifyPanel()">
@@ -1207,11 +1295,13 @@
         </div>
 
         <!-- Links Layer Group -->
-        <div class="tool-section">
+        <div class="tool-section sortable-layer-section" data-section="links">
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('links')">
+                    <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
                     <span class="layer-group-chevron" id="links-chevron">&#9660;</span>
                     <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">🔗 Links</span>
+                    <button class="header-add-btn" onclick="event.stopPropagation(); showCreateGroupModal('link');" title="New Folder">+</button>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all links">
                         <input type="checkbox" id="links-group-vis" checked onchange="toggleGroupVisibility('links', this.checked)">
                     </label>
@@ -1221,38 +1311,18 @@
                            style="width: 100%; padding: 0.3rem; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem; background: var(--bg-input); color: var(--text-primary);">
                     
                     <!-- Link Groups (includes Ungrouped folder) -->
-                    <div id="link-groups-list" style="max-height: 300px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
-                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem; margin-bottom: 0.5rem;" onclick="showCreateGroupModal('link')">
-                        + New Folder
-                    </button>
+                    <div id="link-groups-list" style="max-height: 300px; overflow-y: auto;"></div>
                     
                     <div id="link-import-batches"></div>
                 </div><!-- /links-group-body -->
             </div><!-- /layer-group -->
         </div>
 
-        <!-- Measurements Layer Group -->
-        <div class="tool-section">
-            <div class="layer-group">
-                <div class="layer-group-header" onclick="toggleLayerGroup('measurements')">
-                    <span class="layer-group-chevron" id="measurements-chevron">&#9660;</span>
-                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📐 Measurements</span>
-                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all measurements">
-                        <input type="checkbox" id="measurements-group-vis" checked onchange="toggleGroupVisibility('measurements', this.checked)">
-                    </label>
-                </div>
-                <div class="layer-group-body" id="measurements-group-body">
-                    <!-- Measurement Groups (includes Ungrouped folder) -->
-                    <div id="measurement-groups-list" style="max-height: 300px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
-                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem;" onclick="showCreateGroupModal('measurement')">
-                        📁 New Folder
-                    </button>
-                </div><!-- /measurements-group-body -->
-            </div><!-- /layer-group -->
-
-            <!-- Unified View -->
+        <!-- Unified View -->
+        <div class="tool-section sortable-layer-section" data-section="unified">
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('unified')">
+                    <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
                     <span class="layer-group-chevron" id="unified-chevron">&#9654;</span>
                     <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📋 Unified View</span>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle unified view">
@@ -1260,11 +1330,19 @@
                     </label>
                 </div>
                 <div class="layer-group-body collapsed" id="unified-group-body">
+                    <!-- View options -->
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px; padding: 4px 8px; background: var(--bg-secondary); border-radius: 4px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 0.75rem; cursor: pointer;" title="Show folder hierarchy instead of flat list">
+                            <input type="checkbox" id="unified-show-folders" onchange="toggleUnifiedFolderView(this.checked)">
+                            <span>📁 Folder Structure</span>
+                        </label>
+                    </div>
                     <!-- Unified list showing all items from all types -->
                     <div id="unified-items-list" style="max-height: 400px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
                 </div><!-- /unified-group-body -->
             </div><!-- /layer-group -->
         </div>
+        </div><!-- /layers-container -->
 
         <div class="tool-section">
             <h4>Export</h4>
@@ -1577,6 +1655,214 @@
         </form>
     </div>
 </div>
+
+<!-- Measurement Config Modal -->
+<div id="measurementConfigModal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <h2 style="margin-bottom: 1rem;">⚙️ Measurement Settings</h2>
+        
+        <!-- Tabs -->
+        <div style="display: flex; border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;">
+            <button type="button" class="config-tab active" data-tab="style" onclick="switchMeasureConfigTab('style')">
+                🎨 Line Style
+            </button>
+            <button type="button" class="config-tab" data-tab="display" onclick="switchMeasureConfigTab('display')">
+                👁️ Display
+            </button>
+            <button type="button" class="config-tab" data-tab="presets" onclick="switchMeasureConfigTab('presets')">
+                📋 Presets
+            </button>
+        </div>
+        
+        <!-- Style Tab -->
+        <div id="config-tab-style" class="config-tab-content">
+            <div class="form-group">
+                <label>Line Color</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="color" id="config-line-color" value="#00bcd4" style="width: 50px; height: 30px; border: none; cursor: pointer;">
+                    <input type="text" id="config-line-color-hex" value="#00bcd4" style="flex: 1; padding: 0.4rem;" 
+                           onchange="document.getElementById('config-line-color').value = this.value;">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Line Style</label>
+                <select id="config-line-style" style="width: 100%; padding: 0.4rem;">
+                    <option value="dashed">Dashed ----</option>
+                    <option value="solid">Solid ────</option>
+                    <option value="dotted">Dotted ····</option>
+                    <option value="dashdot">Dash-Dot -·-·</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Line Thickness: <span id="config-thickness-value">1.5</span>px</label>
+                <input type="range" id="config-line-thickness" min="0.5" max="5" step="0.5" value="1.5" 
+                       style="width: 100%;" oninput="document.getElementById('config-thickness-value').textContent = this.value;">
+            </div>
+            <div class="form-group">
+                <label>Marker Size: <span id="config-marker-value">4</span>px</label>
+                <input type="range" id="config-marker-size" min="2" max="10" step="1" value="4" 
+                       style="width: 100%;" oninput="document.getElementById('config-marker-value').textContent = this.value;">
+            </div>
+        </div>
+        
+        <!-- Display Tab -->
+        <div id="config-tab-display" class="config-tab-content" style="display: none;">
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="checkbox" id="config-show-distance" checked>
+                    Show Distance
+                </label>
+            </div>
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="checkbox" id="config-show-angle" checked>
+                    Show Angle
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Label Scale (for monitor size): <span id="config-scale-value">1.0</span>x</label>
+                <input type="range" id="config-label-scale" min="0.5" max="3" step="0.1" value="1.0" 
+                       style="width: 100%;" oninput="document.getElementById('config-scale-value').textContent = this.value;">
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+                    Increase for larger monitors, decrease for smaller screens
+                </div>
+            </div>
+        </div>
+        
+        <!-- Presets Tab -->
+        <div id="config-tab-presets" class="config-tab-content" style="display: none;">
+            <div class="form-group">
+                <label>Saved Presets</label>
+                <div id="config-presets-list" style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; margin-bottom: 0.5rem;">
+                    <!-- Preset items rendered by JS -->
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Save Current Settings as New Preset</label>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="config-new-preset-name" placeholder="Preset name..." style="flex: 1; padding: 0.4rem;">
+                    <button type="button" class="btn btn-success" onclick="addNewConfigType()">Save</button>
+                </div>
+            </div>
+        </div>
+        
+        <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+            <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideMeasurementConfigModal()">Cancel</button>
+            <button type="button" class="btn btn-success btn-save" onclick="saveMeasurementConfig()">Save Settings</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Measurement config modal tabs */
+    .config-tab {
+        padding: 0.5rem 1rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+    }
+    .config-tab:hover {
+        color: var(--text-primary);
+    }
+    .config-tab.active {
+        color: var(--bg-tool-btn-active);
+        border-bottom-color: var(--bg-tool-btn-active);
+    }
+    .config-preset-item {
+        display: flex;
+        align-items: center;
+        padding: 0.5rem;
+        border-bottom: 1px solid var(--border-light);
+        cursor: pointer;
+    }
+    .config-preset-item:hover {
+        background: var(--bg-layer-item-hover);
+    }
+    .config-preset-item.active {
+        background: var(--bg-layer-selected);
+    }
+    .config-preset-color {
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+        margin-right: 0.5rem;
+        border: 1px solid var(--border-color);
+    }
+    .config-preset-name {
+        flex: 1;
+        font-size: 0.85rem;
+    }
+    .config-preset-delete {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 0.25rem;
+        font-size: 0.8rem;
+    }
+    .config-preset-delete:hover {
+        color: #dc3545;
+    }
+    /* Config type item styles */
+    .config-type-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 0.75rem;
+        background: var(--bg-sidebar);
+        border-radius: 4px;
+        margin-bottom: 0.5rem;
+        border: 1px solid var(--border-light);
+        transition: all 0.2s;
+    }
+    .config-type-item:hover {
+        background: var(--bg-layer-item-hover);
+    }
+    .config-type-item.active {
+        border-color: var(--bg-tool-btn-active);
+        background: var(--bg-layer-selected);
+    }
+    .config-type-name {
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+    }
+    .config-type-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+    .config-type-actions button {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.75rem;
+        border-radius: 3px;
+        border: none;
+        cursor: pointer;
+    }
+    .btn-apply {
+        background: var(--bg-tool-btn-active);
+        color: white;
+    }
+    .btn-edit {
+        background: var(--btn-secondary);
+        color: var(--text-primary);
+    }
+    .btn-delete-config {
+        background: #dc3545;
+        color: white;
+        padding: 0.2rem 0.4rem !important;
+    }
+    .config-type-preview {
+        display: inline-block;
+        width: 20px;
+        height: 3px;
+        margin-right: 8px;
+        vertical-align: middle;
+    }
+</style>
 
 {% csrf_token %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>

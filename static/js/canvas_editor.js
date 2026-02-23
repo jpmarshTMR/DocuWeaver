@@ -302,12 +302,20 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize MeasurementTool
     MeasurementTool.init(canvas, PROJECT_ID);
     
+    // Try to restore viewport state IMMEDIATELY before loading data
+    // This provides a faster perceived restoration
+    const viewportRestored = restoreViewportState();
+    
     loadProjectData().then(() => {
-        // Restore viewport state after project data is loaded
-        // Use a timeout to ensure canvas is fully rendered
-        setTimeout(() => {
-            restoreViewportState();
-        }, 200);
+        // Only restore viewport again if it wasn't already restored
+        if (!viewportRestored) {
+            setTimeout(() => {
+                restoreViewportState();
+            }, 100);
+        }
+        
+        // Hook up view state saving for pan/zoom tracking
+        hookViewStateSaving();
     });
 
     // Initialize viewport rotation from project data
@@ -697,6 +705,9 @@ function setupCanvasEvents() {
             selectSheet(obj.sheetData.id);
         } else if (obj && obj.assetData) {
             selectAsset(obj.assetData.id);
+        } else if (obj && obj.isSavedMeasurement) {
+            // Show measurement name in status or highlight in sidebar
+            selectMeasurement(obj.measurementSetId);
         }
     });
 
@@ -706,12 +717,40 @@ function setupCanvasEvents() {
             selectSheet(obj.sheetData.id);
         } else if (obj && obj.assetData) {
             selectAsset(obj.assetData.id);
+        } else if (obj && obj.isSavedMeasurement) {
+            selectMeasurement(obj.measurementSetId);
         }
     });
 
     canvas.on('selection:cleared', function() {
         clearSelection();
     });
+}
+
+// Track currently selected measurement
+let selectedMeasurementId = null;
+
+function selectMeasurement(msId) {
+    selectedMeasurementId = msId;
+    const ms = MeasurementTool ? MeasurementTool.getSavedMeasurements().find(m => m.id === msId) : null;
+    if (ms && typeof showToast === 'function') {
+        showToast(`Selected: ${ms.name || 'Measurement'} - Press Delete to remove`, 'info');
+    }
+    // Highlight in sidebar if needed
+    highlightMeasurementInSidebar(msId);
+}
+
+function highlightMeasurementInSidebar(msId) {
+    // Remove existing highlights
+    document.querySelectorAll('.folder-item-entry.selected-measurement').forEach(el => {
+        el.classList.remove('selected-measurement');
+    });
+    // Add highlight to matching measurement
+    const itemEl = document.querySelector(`.folder-item-entry[data-item-id="${msId}"][data-item-type="measurement"]`);
+    if (itemEl) {
+        itemEl.classList.add('selected-measurement');
+        itemEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
 function setupKeyboardShortcuts() {
@@ -743,6 +782,15 @@ function setupKeyboardShortcuts() {
                 break;
             case 'Escape':
                 clearSelection();
+                selectedMeasurementId = null;
+                break;
+            case 'Delete':
+            case 'Backspace':
+                // Handle delete for selected measurement
+                if (selectedMeasurementId && MeasurementTool) {
+                    e.preventDefault();
+                    deleteSelectedMeasurement();
+                }
                 break;
             case '+':
             case '=':
@@ -753,6 +801,25 @@ function setupKeyboardShortcuts() {
                 break;
         }
     });
+}
+
+/**
+ * Delete the currently selected measurement
+ */
+async function deleteSelectedMeasurement() {
+    if (!selectedMeasurementId) return;
+    
+    const ms = MeasurementTool ? MeasurementTool.getSavedMeasurements().find(m => m.id === selectedMeasurementId) : null;
+    if (!ms) return;
+    
+    // Pass name to MeasurementTool.delete() which handles the confirmation dialog
+    const success = await MeasurementTool.delete(selectedMeasurementId, ms.name || 'Unnamed');
+    if (success) {
+        selectedMeasurementId = null;
+        canvas.discardActiveObject();
+        canvas.renderAll();
+        renderLayerGroupsUI();
+    }
 }
 
 // Mode Management
@@ -770,6 +837,11 @@ function setMode(mode) {
     const measureSection = document.getElementById('measure-section');
     if (measureSection) {
         measureSection.style.display = (mode === 'measure') ? 'block' : 'none';
+    }
+    
+    // Move measurement layer section to top when in measure mode for visibility
+    if (mode === 'measure') {
+        moveMeasurementSectionToTop();
     }
 
     // Auto-deselect when leaving select mode
@@ -831,6 +903,11 @@ function setMode(mode) {
             obj.selectable = isSelectMode;
             obj.evented = isSelectMode || isCropOrSplitMode;
             obj.hoverCursor = isCropOrSplitMode ? 'crosshair' : 'move';
+        }
+        // Measurements should only be selectable/evented in select mode
+        if (obj.isSavedMeasurement) {
+            obj.selectable = isSelectMode;
+            obj.evented = isSelectMode;
         }
     });
     canvas.renderAll();
@@ -2371,6 +2448,12 @@ function clearSelection() {
     canvas.renderAll();
     _clearingSelection = false;
 
+    // Clear selected measurement
+    selectedMeasurementId = null;
+    document.querySelectorAll('.folder-item-entry.selected-measurement').forEach(el => {
+        el.classList.remove('selected-measurement');
+    });
+
     document.querySelectorAll('.layer-item').forEach(item => {
         item.classList.remove('selected');
     });
@@ -3328,6 +3411,42 @@ function toggleSheetVisibility(sheetId, visible) {
     canvas.renderAll();
 }
 
+/**
+ * Toggle visibility of a single asset
+ */
+function toggleAssetVisibility(assetId, visible) {
+    // Update in local data
+    const asset = assets.find(a => a.id === assetId);
+    if (asset) {
+        asset.visible = visible;
+    }
+    // Update on canvas
+    canvas.getObjects().forEach(obj => {
+        if (obj.assetData && obj.assetData.id === assetId) {
+            obj.visible = visible;
+        }
+    });
+    canvas.renderAll();
+}
+
+/**
+ * Toggle visibility of a single link
+ */
+function toggleLinkVisibility(linkId, visible) {
+    // Update in local data
+    const link = links.find(l => l.id === linkId);
+    if (link) {
+        link.visible = visible;
+    }
+    // Update on canvas
+    canvas.getObjects().forEach(obj => {
+        if (obj.linkData && obj.linkData.id === linkId) {
+            obj.visible = visible;
+        }
+    });
+    canvas.renderAll();
+}
+
 function toggleLayerGroup(groupName) {
     const body = document.getElementById(groupName + '-group-body');
     const chevron = document.getElementById(groupName + '-chevron');
@@ -3536,7 +3655,7 @@ function updateZoomDisplay() {
 let viewportSaveTimeout = null;
 
 /**
- * Save the current viewport state (zoom and pan) to localStorage
+ * Save the current viewport state (zoom, pan, rotation) to localStorage
  */
 function saveViewportState() {
     if (!canvas || typeof PROJECT_ID === 'undefined') return;
@@ -3545,28 +3664,29 @@ function saveViewportState() {
     const state = {
         zoom: currentZoomLevel,
         panX: vpt[4],
-        panY: vpt[5]
+        panY: vpt[5],
+        rotation: viewportRotation,
+        timestamp: Date.now()
     };
     
     const key = `docuweaver-viewport-${PROJECT_ID}`;
     localStorage.setItem(key, JSON.stringify(state));
-    console.log('Saved viewport state:', state);
 }
 
 /**
  * Restore the saved viewport state (zoom and pan) from localStorage
+ * @returns {boolean} True if state was successfully restored
  */
 function restoreViewportState() {
     if (!canvas || typeof PROJECT_ID === 'undefined') {
         console.log('Cannot restore viewport: canvas or PROJECT_ID not available');
-        return;
+        return false;
     }
     
     const key = `docuweaver-viewport-${PROJECT_ID}`;
     const saved = localStorage.getItem(key);
     
     console.log('Attempting to restore viewport for project:', PROJECT_ID);
-    console.log('Saved state:', saved);
     
     if (saved) {
         try {
@@ -3575,7 +3695,7 @@ function restoreViewportState() {
                 currentZoomLevel = state.zoom;
                 
                 // Apply the saved viewport transform
-                const angleRad = viewportRotation * Math.PI / 180;
+                const angleRad = (state.rotation || viewportRotation || 0) * Math.PI / 180;
                 const cos = Math.cos(angleRad);
                 const sin = Math.sin(angleRad);
                 
@@ -3587,12 +3707,19 @@ function restoreViewportState() {
                 vpt[4] = state.panX;
                 vpt[5] = state.panY;
                 
+                // Restore rotation if saved
+                if (state.rotation !== undefined) {
+                    viewportRotation = state.rotation;
+                }
+                
                 canvas.setViewportTransform(vpt);
                 canvas.forEachObject(function(obj) { obj.setCoords(); });
                 canvas.requestRenderAll();
                 updateZoomDisplay();
+                updateRotationDisplay();
                 
                 console.log('Successfully restored viewport state:', state);
+                return true;
             } else {
                 console.log('Invalid state structure:', state);
             }
@@ -3602,6 +3729,7 @@ function restoreViewportState() {
     } else {
         console.log('No saved viewport state found for project:', PROJECT_ID);
     }
+    return false;
 }
 
 /**
@@ -5485,11 +5613,77 @@ function renderLayerGroupsUI() {
 }
 
 /**
+ * Check if potentialDescendant is a descendant of ancestorGroup
+ * Used to prevent circular parent-child relationships
+ */
+function isDescendantOf(potentialDescendant, ancestorGroup) {
+    if (!ancestorGroup.child_groups) return false;
+    
+    for (const child of ancestorGroup.child_groups) {
+        if (child.id === potentialDescendant.id) return true;
+        if (isDescendantOf(potentialDescendant, child)) return true;
+    }
+    return false;
+}
+
+/**
  * Get all global groups from all types (for cross-section display)
+ * Deduplicates by group ID to avoid showing the same folder multiple times
  */
 function getAllGlobalGroups() {
     const allGroups = [...assetGroups, ...linkGroups, ...sheetGroups, ...measurementGroups];
-    return allGroups.filter(g => g.scope === 'global' && !g.parent_group);
+    const globalGroups = allGroups.filter(g => g.scope === 'global' && !g.parent_group);
+    
+    // Deduplicate by ID (same global folder may appear in multiple arrays)
+    const seen = new Set();
+    return globalGroups.filter(g => {
+        if (seen.has(g.id)) return false;
+        seen.add(g.id);
+        return true;
+    });
+}
+
+/**
+ * Get item count for a group based on the current type context
+ * This calculates the count client-side for accurate display
+ * @param {object} group - The group object
+ * @param {string} type - The item type (asset, sheet, measurement, link)
+ * @param {boolean} includeNested - If true, includes items from all descendant groups
+ */
+function getGroupItemCountForType(group, type, includeNested = true) {
+    let count = 0;
+    
+    // Count direct items in this group
+    if (type === 'asset') {
+        count = assets.filter(a => a.layer_group === group.id).length;
+    } else if (type === 'sheet') {
+        count = sheets.filter(s => s.layer_group === group.id).length;
+    } else if (type === 'measurement') {
+        const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
+        count = savedMeasurements.filter(m => m.layer_group === group.id).length;
+    } else if (type === 'link') {
+        count = links.filter(l => l.layer_group === group.id).length;
+    }
+    
+    // Recursively add counts from child groups
+    if (includeNested && group.child_groups && group.child_groups.length > 0) {
+        group.child_groups.forEach(child => {
+            count += getGroupItemCountForType(child, type, true);
+        });
+    }
+    
+    return count;
+}
+
+// Track if folder structure view is enabled in unified view
+let unifiedShowFolders = false;
+
+/**
+ * Toggle the unified view between flat list and folder structure
+ */
+function toggleUnifiedFolderView(showFolders) {
+    unifiedShowFolders = showFolders;
+    renderUnifiedList();
 }
 
 /**
@@ -5504,6 +5698,29 @@ function renderUnifiedList() {
     // Get all items from all types
     const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
     
+    // Track collapsed state for unified sections
+    if (!window.unifiedSectionCollapsed) {
+        window.unifiedSectionCollapsed = {};
+    }
+    
+    // Track collapsed state for unified folders
+    if (!window.unifiedFolderCollapsed) {
+        window.unifiedFolderCollapsed = {};
+    }
+
+    if (unifiedShowFolders) {
+        // Folder structure view - show items organized by folder hierarchy
+        renderUnifiedFolderView(container, savedMeasurements);
+    } else {
+        // Flat view - show all items grouped by type
+        renderUnifiedFlatView(container, savedMeasurements);
+    }
+}
+
+/**
+ * Render unified view as flat list grouped by type
+ */
+function renderUnifiedFlatView(container, savedMeasurements) {
     // Create sections for each type
     const sections = [
         { type: 'sheet', items: sheets, icon: '📄', label: 'Sheets' },
@@ -5515,7 +5732,10 @@ function renderUnifiedList() {
     sections.forEach(section => {
         if (section.items.length === 0) return;
 
-        // Section header
+        // Section header (collapsible)
+        const sectionWrapper = document.createElement('div');
+        sectionWrapper.className = 'unified-section';
+        
         const sectionHeader = document.createElement('div');
         sectionHeader.className = 'unified-section-header';
         sectionHeader.style.cssText = `
@@ -5529,23 +5749,56 @@ function renderUnifiedList() {
             display: flex;
             align-items: center;
             gap: 4px;
+            cursor: pointer;
+            user-select: none;
         `;
-        sectionHeader.innerHTML = `<span>${section.icon}</span> ${section.label} (${section.items.length})`;
-        container.appendChild(sectionHeader);
+        
+        const isCollapsed = window.unifiedSectionCollapsed[section.type];
+        
+        const chevron = document.createElement('span');
+        chevron.textContent = isCollapsed ? '▶' : '▼';
+        chevron.style.cssText = 'font-size: 0.7rem; width: 12px;';
+        
+        const labelSpan = document.createElement('span');
+        labelSpan.innerHTML = `<span>${section.icon}</span> ${section.label} (${section.items.length})`;
+        labelSpan.style.flex = '1';
+        
+        sectionHeader.appendChild(chevron);
+        sectionHeader.appendChild(labelSpan);
+        
+        // Items container
+        const itemsContainer = document.createElement('div');
+        itemsContainer.className = 'unified-section-items';
+        if (isCollapsed) {
+            itemsContainer.style.display = 'none';
+        }
+        
+        // Toggle collapse on header click
+        sectionHeader.addEventListener('click', () => {
+            const nowCollapsed = !window.unifiedSectionCollapsed[section.type];
+            window.unifiedSectionCollapsed[section.type] = nowCollapsed;
+            chevron.textContent = nowCollapsed ? '▶' : '▼';
+            itemsContainer.style.display = nowCollapsed ? 'none' : 'block';
+        });
+        
+        sectionWrapper.appendChild(sectionHeader);
 
         // Render items using ToolSectionItem with icons shown
         section.items.forEach(item => {
             if (typeof ToolSectionItem !== 'undefined') {
                 const itemDiv = ToolSectionItem.create(item, section.type, { showIcon: true });
-                container.appendChild(itemDiv);
+                itemsContainer.appendChild(itemDiv);
             } else {
                 // Fallback
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'unified-item';
                 itemDiv.textContent = item.name || item.asset_id || 'Unnamed';
-                container.appendChild(itemDiv);
+                itemsContainer.appendChild(itemDiv);
             }
         });
+        
+        sectionWrapper.appendChild(itemsContainer);
+        container.appendChild(sectionWrapper);
     });
 
     // If no items at all, show message
@@ -5555,6 +5808,196 @@ function renderUnifiedList() {
         emptyMsg.textContent = 'No items yet';
         container.appendChild(emptyMsg);
     }
+}
+
+/**
+ * Render unified view as folder hierarchy
+ */
+function renderUnifiedFolderView(container, savedMeasurements) {
+    // Collect all folders from all types
+    const allGroups = [];
+    const seen = new Set();
+    
+    [...sheetGroups, ...assetGroups, ...linkGroups, ...measurementGroups].forEach(g => {
+        if (!seen.has(g.id) && !g.parent_group) {
+            seen.add(g.id);
+            allGroups.push(g);
+        }
+    });
+    
+    // Sort folders by name
+    allGroups.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    
+    // Render ungrouped items first
+    const ungroupedSheets = sheets.filter(s => !s.layer_group);
+    const ungroupedAssets = assets.filter(a => !a.layer_group);
+    const ungroupedLinks = links.filter(l => !l.layer_group);
+    const ungroupedMeasurements = savedMeasurements.filter(m => !m.layer_group);
+    
+    const totalUngrouped = ungroupedSheets.length + ungroupedAssets.length + 
+                           ungroupedLinks.length + ungroupedMeasurements.length;
+    
+    if (totalUngrouped > 0) {
+        const ungroupedSection = createUnifiedFolderSection(
+            { id: 'ungrouped', name: 'Ungrouped', scope: 'local' },
+            [...ungroupedSheets, ...ungroupedAssets, ...ungroupedLinks, ...ungroupedMeasurements],
+            { sheets: ungroupedSheets, assets: ungroupedAssets, links: ungroupedLinks, measurements: ungroupedMeasurements },
+            0
+        );
+        container.appendChild(ungroupedSection);
+    }
+    
+    // Render each folder with its contents
+    allGroups.forEach(group => {
+        const folderEl = createUnifiedFolderSection(group, null, null, 0, savedMeasurements);
+        container.appendChild(folderEl);
+    });
+    
+    // If nothing to show
+    if (container.children.length === 0) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.style.cssText = 'padding: 8px; color: var(--text-muted); font-size: 0.8rem; text-align: center;';
+        emptyMsg.textContent = 'No items yet';
+        container.appendChild(emptyMsg);
+    }
+}
+
+/**
+ * Create a folder section for the unified folder view
+ */
+function createUnifiedFolderSection(group, itemsOverride, itemsByType, depth, allMeasurements) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'unified-folder-section';
+    wrapper.style.marginLeft = (depth * 12) + 'px';
+    
+    // Get items for this folder
+    let folderSheets, folderAssets, folderLinks, folderMeasurements;
+    
+    if (itemsByType) {
+        // Use provided items (for ungrouped section)
+        folderSheets = itemsByType.sheets || [];
+        folderAssets = itemsByType.assets || [];
+        folderLinks = itemsByType.links || [];
+        folderMeasurements = itemsByType.measurements || [];
+    } else {
+        // Get items directly in this folder
+        const measurements = allMeasurements || (MeasurementTool ? MeasurementTool.getSavedMeasurements() : []);
+        folderSheets = sheets.filter(s => s.layer_group === group.id);
+        folderAssets = assets.filter(a => a.layer_group === group.id);
+        folderLinks = links.filter(l => l.layer_group === group.id);
+        folderMeasurements = measurements.filter(m => m.layer_group === group.id);
+    }
+    
+    const directItemCount = folderSheets.length + folderAssets.length + 
+                            folderLinks.length + folderMeasurements.length;
+    
+    // Calculate total including nested
+    let totalCount = directItemCount;
+    if (group.child_groups && group.child_groups.length > 0) {
+        group.child_groups.forEach(child => {
+            totalCount += getGroupItemCountForType(child, 'sheet', true);
+            totalCount += getGroupItemCountForType(child, 'asset', true);
+            totalCount += getGroupItemCountForType(child, 'link', true);
+            totalCount += getGroupItemCountForType(child, 'measurement', true);
+        });
+    }
+    
+    const hasContent = totalCount > 0 || (group.child_groups && group.child_groups.length > 0);
+    const isCollapsed = window.unifiedFolderCollapsed[group.id];
+    
+    // Folder header
+    const header = document.createElement('div');
+    header.className = 'unified-folder-header';
+    header.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        background: var(--bg-secondary);
+        border-radius: 4px;
+        margin: 2px 0;
+        cursor: pointer;
+        user-select: none;
+        font-size: 0.8rem;
+    `;
+    
+    const chevron = document.createElement('span');
+    chevron.textContent = hasContent ? (isCollapsed ? '▶' : '▼') : '•';
+    chevron.style.cssText = 'font-size: 0.7rem; width: 12px;';
+    
+    const icon = document.createElement('span');
+    icon.textContent = group.scope === 'global' ? '🌐' : '📁';
+    
+    const name = document.createElement('span');
+    name.textContent = group.name;
+    name.style.flex = '1';
+    
+    const count = document.createElement('span');
+    count.textContent = totalCount;
+    count.style.cssText = `
+        font-size: 0.7rem;
+        padding: 1px 6px;
+        background: var(--bg-tertiary);
+        border-radius: 10px;
+        color: var(--text-muted);
+    `;
+    
+    header.appendChild(chevron);
+    header.appendChild(icon);
+    header.appendChild(name);
+    header.appendChild(count);
+    
+    // Content container
+    const content = document.createElement('div');
+    content.className = 'unified-folder-content';
+    if (isCollapsed) {
+        content.style.display = 'none';
+    }
+    
+    // Toggle collapse
+    header.addEventListener('click', () => {
+        const nowCollapsed = !window.unifiedFolderCollapsed[group.id];
+        window.unifiedFolderCollapsed[group.id] = nowCollapsed;
+        chevron.textContent = hasContent ? (nowCollapsed ? '▶' : '▼') : '•';
+        content.style.display = nowCollapsed ? 'none' : 'block';
+    });
+    
+    // Render child folders first
+    if (group.child_groups && group.child_groups.length > 0) {
+        group.child_groups.forEach(child => {
+            const childEl = createUnifiedFolderSection(child, null, null, depth + 1, allMeasurements);
+            content.appendChild(childEl);
+        });
+    }
+    
+    // Render items in this folder (organized by type)
+    const itemTypes = [
+        { items: folderSheets, type: 'sheet', icon: '📄' },
+        { items: folderAssets, type: 'asset', icon: '📍' },
+        { items: folderLinks, type: 'link', icon: '🔗' },
+        { items: folderMeasurements, type: 'measurement', icon: '📐' }
+    ];
+    
+    itemTypes.forEach(({ items, type, icon }) => {
+        items.forEach(item => {
+            if (typeof ToolSectionItem !== 'undefined') {
+                const itemDiv = ToolSectionItem.create(item, type, { showIcon: true });
+                itemDiv.style.marginLeft = '12px';
+                content.appendChild(itemDiv);
+            } else {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'unified-item';
+                itemDiv.style.marginLeft = '12px';
+                itemDiv.textContent = `${icon} ${item.name || item.asset_id || 'Unnamed'}`;
+                content.appendChild(itemDiv);
+            }
+        });
+    });
+    
+    wrapper.appendChild(header);
+    wrapper.appendChild(content);
+    
+    return wrapper;
 }
 
 /**
@@ -5857,6 +6300,9 @@ function createUngroupedFolder(type, count) {
     return div;
 }
 
+// Track dragged folder for folder-to-folder drag
+let draggedFolder = null;
+
 /**
  * Create a group/folder item element with nested support
  * @param {Object} group - The group object
@@ -5875,14 +6321,38 @@ function createGroupItem(group, type, depth = 0, isGlobalCrossType = false) {
     div.dataset.originalType = group.group_type; // Store the original type
     div.style.marginLeft = (depth * 12) + 'px';
 
-    // Make the group a drop target for items
-    // Global groups accept any type, local groups only accept their own type
+    // Make the folder draggable (for folder-to-folder nesting)
+    div.draggable = true;
+    div.addEventListener('dragstart', (e) => {
+        e.stopPropagation();
+        draggedFolder = { id: group.id, type: group.group_type, element: div };
+        draggedItem = null; // Clear item drag
+        div.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+    });
+    
+    div.addEventListener('dragend', (e) => {
+        div.classList.remove('dragging');
+        draggedFolder = null;
+    });
+
+    // Make the group a drop target for items AND folders
     div.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const canAccept = group.scope === 'global' || (draggedItem && draggedItem.type === type);
-        if (draggedItem && canAccept) {
-            div.classList.add('drop-target-active');
+        
+        // Check if we're dragging an item or a folder
+        if (draggedItem) {
+            const canAccept = group.scope === 'global' || draggedItem.type === type;
+            if (canAccept) {
+                div.classList.add('drop-target-active');
+            }
+        } else if (draggedFolder && draggedFolder.id !== group.id) {
+            // Can drop folder if same type and not dropping onto itself or its children
+            const canAccept = draggedFolder.type === group.group_type;
+            if (canAccept) {
+                div.classList.add('drop-target-active');
+            }
         }
     });
 
@@ -5894,18 +6364,32 @@ function createGroupItem(group, type, depth = 0, isGlobalCrossType = false) {
         e.preventDefault();
         e.stopPropagation();
         div.classList.remove('drop-target-active');
-        const canAccept = group.scope === 'global' || (draggedItem && draggedItem.type === type);
-        if (draggedItem && canAccept) {
-            await moveItemToGroup(group.id, draggedItem.type, draggedItem.id);
-            draggedItem = null;
+        
+        if (draggedItem) {
+            // Dropping an item into this folder
+            const canAccept = group.scope === 'global' || draggedItem.type === type;
+            if (canAccept) {
+                await moveItemToGroup(group.id, draggedItem.type, draggedItem.id);
+                draggedItem = null;
+            }
+        } else if (draggedFolder && draggedFolder.id !== group.id) {
+            // Dropping a folder into this folder (joining)
+            const canAccept = draggedFolder.type === group.group_type;
+            if (canAccept) {
+                await joinGroups(group.id, draggedFolder.id);
+                draggedFolder = null;
+            }
         }
     });
 
+    // Calculate context-aware item count (for global folders showing in specific section)
+    const contextItemCount = getGroupItemCountForType(group, type);
+    
     // Toggle button for expand/collapse
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'folder-toggle';
     // For global cross-type folders, we only show items of the current context type
-    const hasChildren = (group.child_groups && group.child_groups.length > 0) || group.item_count > 0;
+    const hasChildren = (group.child_groups && group.child_groups.length > 0) || contextItemCount > 0;
     toggleBtn.textContent = hasChildren ? '▼' : '•';
     toggleBtn.title = hasChildren ? 'Toggle folder' : '';
     toggleBtn.disabled = !hasChildren;
@@ -5939,10 +6423,10 @@ function createGroupItem(group, type, depth = 0, isGlobalCrossType = false) {
     nameSpan.textContent = group.name;
     nameSpan.title = group.name + (isGlobalCrossType ? ` (${group.group_type} folder)` : '');
 
-    // Item count badge
+    // Item count badge - use context-aware count
     const countBadge = document.createElement('span');
     countBadge.className = 'group-count';
-    countBadge.textContent = group.item_count || 0;
+    countBadge.textContent = contextItemCount;
 
     // Settings cog button
     const settingsBtn = document.createElement('button');
@@ -6054,9 +6538,15 @@ function showFolderSettingsMenu(group, type, anchorEl) {
         ungroupedItems = assets.filter(a => !a.layer_group);
     } else if (type === 'sheet') {
         ungroupedItems = sheets.filter(s => !s.layer_group);
+    } else if (type === 'measurement') {
+        const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
+        ungroupedItems = savedMeasurements.filter(m => !m.layer_group);
     } else {
         ungroupedItems = links.filter(l => !l.layer_group);
     }
+    
+    // Get context-aware item count for this group
+    const contextItemCount = getGroupItemCountForType(group, type);
 
     // Menu options
     const options = [
@@ -6090,7 +6580,7 @@ function showFolderSettingsMenu(group, type, anchorEl) {
         {
             label: 'Ungroup all items',
             icon: '📤',
-            disabled: group.item_count === 0,
+            disabled: contextItemCount === 0,
             action: () => ungroupAllItems(group.id, type)
         }
     ];
@@ -6142,6 +6632,9 @@ async function assignAllUngroupedToGroup(groupId, type) {
         items = assets.filter(a => !a.layer_group);
     } else if (type === 'sheet') {
         items = sheets.filter(s => !s.layer_group);
+    } else if (type === 'measurement') {
+        const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
+        items = savedMeasurements.filter(m => !m.layer_group);
     } else {
         items = links.filter(l => !l.layer_group);
     }
@@ -6288,15 +6781,52 @@ async function createSubfolder(parentId, type) {
  * Show dialog to move a group to another parent
  */
 function showMoveGroupDialog(group, type) {
-    const groups = type === 'asset' ? assetGroups : linkGroups;
-    const availableParents = groups.filter(g => g.id !== group.id && g.id !== group.parent_group);
+    // Get type-specific groups
+    let typeGroups;
+    if (type === 'asset') {
+        typeGroups = assetGroups;
+    } else if (type === 'link') {
+        typeGroups = linkGroups;
+    } else if (type === 'sheet') {
+        typeGroups = sheetGroups;
+    } else if (type === 'measurement') {
+        typeGroups = measurementGroups;
+    } else {
+        typeGroups = [];
+    }
+    
+    // Get all Global folders (any type) that could accept this folder
+    const globalFolders = getAllGlobalGroups().filter(g => 
+        g.id !== group.id && 
+        g.id !== group.parent_group &&
+        !isDescendantOf(g, group) // Don't allow moving to own descendants
+    );
+    
+    // Combine type-specific folders + global folders, removing duplicates
+    const allFolders = [...typeGroups];
+    globalFolders.forEach(gf => {
+        if (!allFolders.some(f => f.id === gf.id)) {
+            allFolders.push(gf);
+        }
+    });
+    
+    // Filter out the current group and its current parent
+    const availableParents = allFolders.filter(g => 
+        g.id !== group.id && 
+        g.id !== group.parent_group &&
+        !isDescendantOf(g, group)
+    );
 
     if (availableParents.length === 0) {
         alert('No other folders available to move to.');
         return;
     }
 
-    const options = ['(Root level - no parent)', ...availableParents.map(g => g.name)];
+    // Build options list with indicators for global folders
+    const options = ['(Root level - no parent)', ...availableParents.map(g => {
+        const prefix = g.scope === 'global' ? '🌐 ' : '📁 ';
+        return prefix + g.name;
+    })];
     const choice = prompt(`Move "${group.name}" to:\n\n${options.map((o, i) => `${i}: ${o}`).join('\n')}\n\nEnter number:`);
     
     if (choice === null) return;
@@ -6857,6 +7387,281 @@ async function saveCurrentMeasurement() {
     return saveMeasurementPrompt();
 }
 
+// ==================== Measurement Config Modal ====================
+
+function showMeasurementConfigModal() {
+    const modal = document.getElementById('measurementConfigModal');
+    if (!modal) return;
+    
+    // Get current config from MeasurementTool
+    const config = MeasurementTool.getConfig();
+    
+    // Populate display settings
+    document.getElementById('config-show-distance').checked = config.showDistance !== false;
+    document.getElementById('config-show-angle').checked = config.showAngle !== false;
+    document.getElementById('config-label-scale').value = config.labelScale || 1;
+    document.getElementById('label-scale-value').textContent = (config.labelScale || 1).toFixed(1);
+    
+    // Populate line style settings
+    document.getElementById('config-line-type').value = config.lineStyle || 'solid';
+    document.getElementById('config-stroke-width').value = config.lineStrokeWidth || 2;
+    document.getElementById('stroke-width-value').textContent = config.lineStrokeWidth || 2;
+    document.getElementById('config-line-color').value = config.lineColor || '#00bcd4';
+    document.getElementById('config-marker-color').value = config.markerColor || config.lineColor || '#00bcd4';
+    
+    // Refresh config types list
+    refreshConfigTypesList();
+    
+    // Show first tab by default
+    switchConfigTab('display');
+    
+    modal.style.display = 'flex';
+}
+
+function hideMeasurementConfigModal() {
+    const modal = document.getElementById('measurementConfigModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function switchConfigTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.config-tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+    
+    // Update tab panels
+    document.querySelectorAll('.config-tab-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `tab-${tabName}`);
+    });
+}
+
+function saveMeasurementConfig() {
+    const config = {
+        showDistance: document.getElementById('config-show-distance').checked,
+        showAngle: document.getElementById('config-show-angle').checked,
+        labelScale: parseFloat(document.getElementById('config-label-scale').value) || 1,
+        lineStyle: document.getElementById('config-line-type').value || 'solid',
+        lineStrokeWidth: parseInt(document.getElementById('config-stroke-width').value) || 2,
+        lineColor: document.getElementById('config-line-color').value || '#FF0000',
+        markerColor: document.getElementById('config-marker-color').value || '#FF0000',
+        previewLineColor: document.getElementById('config-line-color').value || '#FF0000'
+    };
+    
+    // Update dash array based on style
+    config.lineDashArray = MeasurementTool.getLineDashArray(config.lineStyle, config.lineStrokeWidth);
+    
+    MeasurementTool.updateConfig(config);
+    hideMeasurementConfigModal();
+    
+    console.log('Measurement config saved:', config);
+}
+
+function refreshConfigTypesList() {
+    const container = document.getElementById('config-types-list');
+    if (!container) return;
+    
+    const configTypes = MeasurementTool.getConfigTypes();
+    const currentType = MeasurementTool.getCurrentConfigType();
+    container.innerHTML = '';
+    
+    // configTypes is an object with keys like 'default', 'typeA', etc.
+    Object.entries(configTypes).forEach(([key, ct]) => {
+        const item = document.createElement('div');
+        item.className = 'config-type-item';
+        if (key === currentType) {
+            item.classList.add('active');
+        }
+        
+        const cfg = ct.config || {};
+        item.innerHTML = `
+            <span class="config-type-name">${ct.name || key}</span>
+            <div class="config-type-actions">
+                <button type="button" class="btn-apply" onclick="applyConfigType('${key}')">Apply</button>
+                <button type="button" class="btn-edit" onclick="editConfigType('${key}')">Edit</button>
+                ${key !== 'default' ? `<button type="button" class="btn-delete-config" onclick="deleteConfigTypeHandler('${key}')">×</button>` : ''}
+            </div>
+        `;
+        
+        // Add color preview
+        const preview = document.createElement('span');
+        preview.className = 'config-type-preview';
+        const lineColor = cfg.lineColor || '#00bcd4';
+        const lineStyle = cfg.lineStyle || 'dashed';
+        let bgStyle = `background-color: ${lineColor};`;
+        if (lineStyle === 'dashed') {
+            bgStyle = `background: repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 5px, transparent 5px, transparent 10px);`;
+        } else if (lineStyle === 'dotted') {
+            bgStyle = `background: repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 2px, transparent 2px, transparent 5px);`;
+        }
+        preview.style.cssText = `
+            display: inline-block;
+            width: 20px;
+            height: 3px;
+            ${bgStyle}
+            margin-right: 8px;
+            vertical-align: middle;
+        `;
+        item.querySelector('.config-type-name').prepend(preview);
+        
+        container.appendChild(item);
+    });
+}
+
+function applyConfigType(name) {
+    MeasurementTool.setConfigType(name);
+    
+    // Update form fields with applied config
+    const config = MeasurementTool.getConfig();
+    document.getElementById('config-show-distance').checked = config.showDistance !== false;
+    document.getElementById('config-show-angle').checked = config.showAngle !== false;
+    document.getElementById('config-label-scale').value = config.labelScale || 1;
+    document.getElementById('label-scale-value').textContent = (config.labelScale || 1).toFixed(1);
+    document.getElementById('config-line-type').value = config.lineStyle || 'solid';
+    document.getElementById('config-stroke-width').value = config.lineStrokeWidth || 2;
+    document.getElementById('stroke-width-value').textContent = config.lineStrokeWidth || 2;
+    document.getElementById('config-line-color').value = config.lineColor || '#00bcd4';
+    document.getElementById('config-marker-color').value = config.markerColor || config.lineColor || '#00bcd4';
+    
+    // Update the list to show active state
+    refreshConfigTypesList();
+    
+    console.log('Applied config type:', name);
+}
+
+function addNewConfigType() {
+    const nameInput = document.getElementById('config-new-preset-name');
+    const name = nameInput ? nameInput.value.trim() : prompt('Enter name for new measurement type:');
+    if (!name) return;
+    
+    // Create a key from the name (lowercase, no spaces)
+    const key = name.toLowerCase().replace(/\s+/g, '_');
+    
+    // Get current settings as the new type's settings
+    const lineStyle = document.getElementById('config-line-type').value || 'solid';
+    const lineStrokeWidth = parseInt(document.getElementById('config-stroke-width').value) || 2;
+    
+    const settings = {
+        showDistance: document.getElementById('config-show-distance').checked,
+        showAngle: document.getElementById('config-show-angle').checked,
+        labelScale: parseFloat(document.getElementById('config-label-scale').value) || 1,
+        lineStyle: lineStyle,
+        lineStrokeWidth: lineStrokeWidth,
+        lineColor: document.getElementById('config-line-color').value || '#00bcd4',
+        markerColor: document.getElementById('config-marker-color').value || '#00bcd4',
+        previewLineColor: document.getElementById('config-line-color').value || '#00bcd4',
+        lineDashArray: MeasurementTool.getLineDashArray(lineStyle, lineStrokeWidth)
+    };
+    
+    // Check if key already exists
+    const existingTypes = MeasurementTool.getConfigTypes();
+    if (existingTypes[key]) {
+        alert('A config type with that name already exists.');
+        return;
+    }
+    
+    MeasurementTool.saveConfigType(key, name, settings);
+    refreshConfigTypesList();
+    if (nameInput) nameInput.value = '';
+    console.log('Added new config type:', key, name);
+}
+
+function editConfigType(key) {
+    // Apply this type first so user can see/edit its settings
+    applyConfigType(key);
+    
+    // Switch to line style tab for editing
+    switchConfigTab('style');
+    
+    // Store the type being edited
+    window._editingConfigType = key;
+    
+    // Get the display name
+    const configTypes = MeasurementTool.getConfigTypes();
+    const displayName = configTypes[key]?.name || key;
+    
+    // Change save button text temporarily
+    const saveBtn = document.querySelector('#measurementConfigModal .btn-save');
+    if (saveBtn) {
+        saveBtn.textContent = `Update "${displayName}"`;
+        saveBtn.onclick = function() {
+            saveAndUpdateConfigType();
+        };
+    }
+}
+
+function saveAndUpdateConfigType() {
+    const key = window._editingConfigType;
+    if (key) {
+        const configTypes = MeasurementTool.getConfigTypes();
+        const displayName = configTypes[key]?.name || key;
+        
+        const lineStyle = document.getElementById('config-line-type').value || 'solid';
+        const lineStrokeWidth = parseInt(document.getElementById('config-stroke-width').value) || 2;
+        
+        const settings = {
+            showDistance: document.getElementById('config-show-distance').checked,
+            showAngle: document.getElementById('config-show-angle').checked,
+            labelScale: parseFloat(document.getElementById('config-label-scale').value) || 1,
+            lineStyle: lineStyle,
+            lineStrokeWidth: lineStrokeWidth,
+            lineColor: document.getElementById('config-line-color').value || '#00bcd4',
+            markerColor: document.getElementById('config-marker-color').value || '#00bcd4',
+            previewLineColor: document.getElementById('config-line-color').value || '#00bcd4',
+            lineDashArray: MeasurementTool.getLineDashArray(lineStyle, lineStrokeWidth)
+        };
+        
+        MeasurementTool.saveConfigType(key, displayName, settings);
+        refreshConfigTypesList();
+        console.log('Updated config type:', key);
+    }
+    
+    // Reset state
+    window._editingConfigType = null;
+    const saveBtn = document.querySelector('#measurementConfigModal .btn-save');
+    if (saveBtn) {
+        saveBtn.textContent = 'Save Settings';
+        saveBtn.onclick = saveMeasurementConfig;
+    }
+    
+    // Apply and close
+    saveMeasurementConfig();
+}
+
+function deleteConfigTypeHandler(key) {
+    const configTypes = MeasurementTool.getConfigTypes();
+    const displayName = configTypes[key]?.name || key;
+    
+    if (!confirm(`Delete measurement type "${displayName}"?`)) return;
+    
+    MeasurementTool.deleteConfigType(key);
+    refreshConfigTypesList();
+    console.log('Deleted config type:', key);
+}
+
+// Initialize config tab click handlers
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.config-tab-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            switchConfigTab(this.dataset.tab);
+        });
+    });
+    
+    // Slider value displays
+    const labelScaleSlider = document.getElementById('config-label-scale');
+    if (labelScaleSlider) {
+        labelScaleSlider.addEventListener('input', function() {
+            document.getElementById('label-scale-value').textContent = parseFloat(this.value).toFixed(1);
+        });
+    }
+    
+    const strokeWidthSlider = document.getElementById('config-stroke-width');
+    if (strokeWidthSlider) {
+        strokeWidthSlider.addEventListener('input', function() {
+            document.getElementById('stroke-width-value').textContent = this.value;
+        });
+    }
+});
+
 /**
  * Delete a measurement set
  */
@@ -6922,3 +7727,196 @@ function applyPdfInversion() {
     canvas.renderAll();
 }
 
+
+// ==================== Layer Section Sorting ====================
+
+let draggedSection = null;
+
+function initLayerSectionSorting() {
+    const container = document.getElementById('layers-container');
+    if (!container) return;
+    
+    const sections = container.querySelectorAll('.sortable-layer-section');
+    
+    sections.forEach(section => {
+        const handle = section.querySelector('.drag-handle');
+        if (!handle) return;
+        
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            draggedSection = section;
+            section.classList.add('dragging');
+            
+            document.addEventListener('mousemove', onDragMove);
+            document.addEventListener('mouseup', onDragEnd);
+        });
+        
+        section.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (draggedSection && draggedSection !== section) {
+                section.classList.add('drag-over');
+            }
+        });
+        
+        section.addEventListener('dragleave', () => {
+            section.classList.remove('drag-over');
+        });
+    });
+    
+    // Restore saved order
+    restoreLayerSectionOrder();
+}
+
+function onDragMove(e) {
+    if (!draggedSection) return;
+    
+    const container = document.getElementById('layers-container');
+    const sections = [...container.querySelectorAll('.sortable-layer-section')];
+    
+    // Find section under cursor
+    const mouseY = e.clientY;
+    let targetSection = null;
+    
+    for (const section of sections) {
+        if (section === draggedSection) continue;
+        const rect = section.getBoundingClientRect();
+        if (mouseY >= rect.top && mouseY <= rect.bottom) {
+            targetSection = section;
+            break;
+        }
+    }
+    
+    // Clear all drag-over states
+    sections.forEach(s => s.classList.remove('drag-over'));
+    
+    if (targetSection) {
+        const targetRect = targetSection.getBoundingClientRect();
+        const isAboveMiddle = mouseY < targetRect.top + targetRect.height / 2;
+        
+        if (isAboveMiddle) {
+            targetSection.classList.add('drag-over');
+        } else {
+            // Add indicator below
+            const nextSibling = targetSection.nextElementSibling;
+            if (nextSibling && nextSibling.classList.contains('sortable-layer-section')) {
+                nextSibling.classList.add('drag-over');
+            }
+        }
+    }
+}
+
+function onDragEnd(e) {
+    if (!draggedSection) return;
+    
+    const container = document.getElementById('layers-container');
+    const sections = [...container.querySelectorAll('.sortable-layer-section')];
+    
+    // Find drop target
+    const mouseY = e.clientY;
+    let targetSection = null;
+    let insertBefore = true;
+    
+    for (const section of sections) {
+        if (section === draggedSection) continue;
+        const rect = section.getBoundingClientRect();
+        if (mouseY >= rect.top && mouseY <= rect.bottom) {
+            targetSection = section;
+            insertBefore = mouseY < rect.top + rect.height / 2;
+            break;
+        }
+    }
+    
+    // Clear states
+    sections.forEach(s => s.classList.remove('drag-over', 'dragging'));
+    
+    // Move section
+    if (targetSection && targetSection !== draggedSection) {
+        if (insertBefore) {
+            container.insertBefore(draggedSection, targetSection);
+        } else {
+            container.insertBefore(draggedSection, targetSection.nextSibling);
+        }
+        saveLayerSectionOrder();
+    }
+    
+    draggedSection = null;
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup', onDragEnd);
+}
+
+function saveLayerSectionOrder() {
+    const container = document.getElementById('layers-container');
+    if (!container) return;
+    
+    const sections = container.querySelectorAll('.sortable-layer-section');
+    const order = [...sections].map(s => s.dataset.section);
+    
+    localStorage.setItem(`docuweaver-layer-order-${PROJECT_ID}`, JSON.stringify(order));
+    console.log('Layer section order saved:', order);
+}
+
+function restoreLayerSectionOrder() {
+    const container = document.getElementById('layers-container');
+    if (!container) return;
+    
+    const savedOrder = localStorage.getItem(`docuweaver-layer-order-${PROJECT_ID}`);
+    if (!savedOrder) return;
+    
+    try {
+        const order = JSON.parse(savedOrder);
+        const sections = container.querySelectorAll('.sortable-layer-section');
+        const sectionMap = {};
+        
+        sections.forEach(s => {
+            sectionMap[s.dataset.section] = s;
+        });
+        
+        // Reorder sections based on saved order
+        order.forEach(sectionName => {
+            if (sectionMap[sectionName]) {
+                container.appendChild(sectionMap[sectionName]);
+            }
+        });
+        
+        console.log('Layer section order restored:', order);
+    } catch (e) {
+        console.warn('Failed to restore layer section order:', e);
+    }
+}
+
+function moveMeasurementSectionToTop() {
+    const container = document.getElementById('layers-container');
+    if (!container) return;
+    
+    const measurementSection = container.querySelector('.sortable-layer-section[data-section="measurements"]');
+    if (measurementSection && container.firstChild !== measurementSection) {
+        container.insertBefore(measurementSection, container.firstChild);
+        saveLayerSectionOrder();
+    }
+}
+
+// Initialize layer sorting on DOM ready
+document.addEventListener('DOMContentLoaded', function() {
+    initLayerSectionSorting();
+});
+
+
+// ==================== View State Persistence Hooks ====================
+
+// Hook into zoom and pan to save view state more frequently
+function hookViewStateSaving() {
+    if (!canvas) return;
+    
+    // Save on mouse:up after panning
+    canvas.on('mouse:up', function() {
+        if (currentMode === 'pan') {
+            debouncedSaveViewportState();
+        }
+    });
+}
+
+// Save view state before page unload
+window.addEventListener('beforeunload', function() {
+    saveViewportState();
+});

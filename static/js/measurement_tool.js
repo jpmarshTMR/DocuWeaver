@@ -13,6 +13,9 @@
  * - MeasurementTool.delete(id) - Delete a saved measurement
  * - MeasurementTool.getCurrentPoints() - Get current measurement points
  * - MeasurementTool.getSavedMeasurements() - Get all saved measurements
+ * - MeasurementTool.setConfigType(typeName) - Set current measurement config type
+ * - MeasurementTool.getConfigTypes() - Get all defined config types
+ * - MeasurementTool.updateConfig(settings) - Update current config
  */
 
 const MeasurementTool = (() => {
@@ -25,15 +28,17 @@ const MeasurementTool = (() => {
     let previewLabel = null;
     let savedMeasurements = [];
     let projectId = null;
+    let currentConfigType = 'default';  // Active config type name
 
-    // Configuration
-    const config = {
+    // Default Configuration
+    const defaultConfig = {
         markerRadius: 4,
         markerColor: '#00bcd4',
         markerStroke: '#ffffff',
         markerStrokeWidth: 1,
         lineColor: '#00bcd4',
         lineStrokeWidth: 1.5,
+        lineStyle: 'dashed',  // 'solid', 'dashed', 'dotted'
         lineDashArray: [8, 4],
         previewLineColor: '#00bcd4',
         previewLineStrokeWidth: 1,
@@ -46,8 +51,156 @@ const MeasurementTool = (() => {
         previewLabelBgColor: 'rgba(0, 188, 212, 0.5)',
         fontFamily: 'monospace',
         labelPadding: 3,
-        minSegmentLength: 2  // Minimum pixels for a segment
+        minSegmentLength: 2,  // Minimum pixels for a segment
+        showAngle: true,      // Show angle on labels
+        showDistance: true,   // Show distance on labels
+        labelScale: 1.0       // Scale factor for label size (for monitor size adjustment)
     };
+
+    // Active configuration (can be modified)
+    let config = { ...defaultConfig };
+
+    // Measurement config types (presets)
+    let configTypes = {
+        'default': {
+            name: 'Default',
+            config: { ...defaultConfig }
+        },
+        'typeA': {
+            name: 'Type A - Red Solid',
+            config: {
+                ...defaultConfig,
+                lineColor: '#e74c3c',
+                markerColor: '#e74c3c',
+                previewLineColor: '#e74c3c',
+                labelBgColor: 'rgba(231, 76, 60, 0.85)',
+                previewLabelBgColor: 'rgba(231, 76, 60, 0.5)',
+                lineStyle: 'solid',
+                lineDashArray: [],
+                lineStrokeWidth: 2
+            }
+        },
+        'typeB': {
+            name: 'Type B - Green Dotted',
+            config: {
+                ...defaultConfig,
+                lineColor: '#27ae60',
+                markerColor: '#27ae60',
+                previewLineColor: '#27ae60',
+                labelBgColor: 'rgba(39, 174, 96, 0.85)',
+                previewLabelBgColor: 'rgba(39, 174, 96, 0.5)',
+                lineStyle: 'dotted',
+                lineDashArray: [2, 4],
+                lineStrokeWidth: 2
+            }
+        }
+    };
+
+    // Load saved config types from localStorage
+    function loadConfigTypes() {
+        try {
+            const saved = localStorage.getItem('measurementConfigTypes');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                // Merge with defaults, keeping user-defined types
+                configTypes = { ...configTypes, ...parsed };
+            }
+        } catch (e) {
+            console.warn('Could not load measurement config types:', e);
+        }
+    }
+
+    // Save config types to localStorage
+    function saveConfigTypes() {
+        try {
+            localStorage.setItem('measurementConfigTypes', JSON.stringify(configTypes));
+        } catch (e) {
+            console.warn('Could not save measurement config types:', e);
+        }
+    }
+
+    // ==================== Config Management ====================
+
+    /**
+     * Set the current measurement config type
+     */
+    function setConfigType(typeName) {
+        if (configTypes[typeName]) {
+            currentConfigType = typeName;
+            config = { ...defaultConfig, ...configTypes[typeName].config };
+            console.log(`Switched to measurement config: ${typeName}`);
+            return true;
+        }
+        console.warn(`Unknown config type: ${typeName}`);
+        return false;
+    }
+
+    /**
+     * Update current config with new settings
+     */
+    function updateConfig(newSettings) {
+        config = { ...config, ...newSettings };
+        // Also update the current config type if it exists
+        if (configTypes[currentConfigType]) {
+            configTypes[currentConfigType].config = { ...configTypes[currentConfigType].config, ...newSettings };
+            saveConfigTypes();
+        }
+    }
+
+    /**
+     * Create or update a config type
+     */
+    function saveConfigType(typeName, displayName, configSettings) {
+        configTypes[typeName] = {
+            name: displayName,
+            config: { ...defaultConfig, ...configSettings }
+        };
+        saveConfigTypes();
+        return true;
+    }
+
+    /**
+     * Delete a config type (cannot delete 'default')
+     */
+    function deleteConfigType(typeName) {
+        if (typeName === 'default') return false;
+        if (configTypes[typeName]) {
+            delete configTypes[typeName];
+            saveConfigTypes();
+            if (currentConfigType === typeName) {
+                setConfigType('default');
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Get all config types
+     */
+    function getConfigTypes() {
+        return { ...configTypes };
+    }
+
+    /**
+     * Get current config type name
+     */
+    function getCurrentConfigType() {
+        return currentConfigType;
+    }
+
+    /**
+     * Get line dash array based on style name
+     */
+    function getLineDashArray(style, strokeWidth = 2) {
+        switch (style) {
+            case 'solid': return [];
+            case 'dashed': return [strokeWidth * 4, strokeWidth * 2];
+            case 'dotted': return [strokeWidth, strokeWidth * 2];
+            case 'dashdot': return [strokeWidth * 4, strokeWidth * 2, strokeWidth, strokeWidth * 2];
+            default: return [strokeWidth * 4, strokeWidth * 2];
+        }
+    }
 
     // ==================== Notification System ====================
     
@@ -67,6 +220,7 @@ const MeasurementTool = (() => {
     function init(canvasInstance, projectIdParam) {
         canvas = canvasInstance;
         projectId = projectIdParam;
+        loadConfigTypes();  // Load saved config types
         console.log('MeasurementTool initialized');
     }
 
@@ -155,12 +309,16 @@ const MeasurementTool = (() => {
             const p1 = currentPoints[n - 2];
             const p2 = currentPoints[n - 1];
 
+            // Get line dash array based on style
+            const lineDash = config.lineStyle === 'solid' ? [] : 
+                             getLineDashArray(config.lineStyle, config.lineStrokeWidth);
+
             // Draw segment line
             const segLine = new fabric.Line([p1.x, p1.y, p2.x, p2.y], {
                 stroke: config.lineColor,
                 strokeWidth: config.lineStrokeWidth,
                 strokeUniform: true,
-                strokeDashArray: config.lineDashArray,
+                strokeDashArray: lineDash,
                 selectable: false,
                 evented: false,
                 isMeasurement: true
@@ -169,14 +327,14 @@ const MeasurementTool = (() => {
             canvas.bringToFront(segLine);
             currentOverlays.push(segLine);
 
-            // Draw segment distance label
-            const dist = calcDistance(p1, p2);
+            // Draw segment label with distance and angle
+            const scaledFontSize = Math.round(config.labelFontSize * config.labelScale);
             const midX = (p1.x + p2.x) / 2;
             const midY = (p1.y + p2.y) / 2;
-            const segLabel = new fabric.Text(formatDistance(dist), {
+            const segLabel = new fabric.Text(formatMeasurementLabel(p1, p2), {
                 left: midX,
-                top: midY - 18,
-                fontSize: config.labelFontSize,
+                top: midY - (scaledFontSize + 6),
+                fontSize: scaledFontSize,
                 fill: config.labelColor,
                 backgroundColor: config.labelBgColor,
                 fontFamily: config.fontFamily,
@@ -202,8 +360,11 @@ const MeasurementTool = (() => {
         if (currentMode === 'single' && currentPoints.length >= 2) return;
 
         const lastPt = currentPoints[currentPoints.length - 1];
+        const pointerPt = { x: pointerX, y: pointerY };
 
         // Update or create preview line
+        const previewDash = config.lineStyle === 'solid' ? [4, 4] : 
+                            getLineDashArray(config.lineStyle, config.previewLineStrokeWidth);
         if (!previewLine) {
             previewLine = new fabric.Line(
                 [lastPt.x, lastPt.y, pointerX, pointerY],
@@ -211,7 +372,7 @@ const MeasurementTool = (() => {
                     stroke: config.previewLineColor,
                     strokeWidth: config.previewLineStrokeWidth,
                     strokeUniform: true,
-                    strokeDashArray: config.previewLineDashArray,
+                    strokeDashArray: previewDash,
                     opacity: config.previewLineOpacity,
                     selectable: false,
                     evented: false,
@@ -224,17 +385,17 @@ const MeasurementTool = (() => {
         }
         canvas.bringToFront(previewLine);
 
-        // Update or create preview label
-        const dist = calcDistance(lastPt, { x: pointerX, y: pointerY });
-        const label = formatDistance(dist);
+        // Update or create preview label with distance and angle
+        const label = formatMeasurementLabel(lastPt, pointerPt);
+        const scaledPreviewFontSize = Math.round(config.previewLabelFontSize * config.labelScale);
         const midX = (lastPt.x + pointerX) / 2;
         const midY = (lastPt.y + pointerY) / 2;
 
         if (!previewLabel) {
             previewLabel = new fabric.Text(label, {
                 left: midX,
-                top: midY - 18,
-                fontSize: config.previewLabelFontSize,
+                top: midY - (scaledPreviewFontSize + 6),
+                fontSize: scaledPreviewFontSize,
                 fill: config.labelColor,
                 backgroundColor: config.previewLabelBgColor,
                 fontFamily: config.fontFamily,
@@ -245,7 +406,12 @@ const MeasurementTool = (() => {
             });
             canvas.add(previewLabel);
         } else {
-            previewLabel.set({ text: label, left: midX, top: midY - 18 });
+            previewLabel.set({ 
+                text: label, 
+                left: midX, 
+                top: midY - (scaledPreviewFontSize + 6),
+                fontSize: scaledPreviewFontSize
+            });
         }
         canvas.bringToFront(previewLabel);
         canvas.renderAll();
@@ -263,7 +429,7 @@ const MeasurementTool = (() => {
         }
     }
 
-    // ==================== Distance Calculations ====================
+    // ==================== Distance & Angle Calculations ====================
 
     function calcDistance(p1, p2) {
         const dx = p2.x - p1.x;
@@ -280,6 +446,19 @@ const MeasurementTool = (() => {
         return { pixels: pixelDist, meters: null, calibrated: false };
     }
 
+    /**
+     * Calculate angle between two points (in degrees from horizontal)
+     */
+    function calcAngle(p1, p2) {
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        // Note: Canvas Y increases downward, so we negate dy for standard angle
+        let angle = Math.atan2(-dy, dx) * (180 / Math.PI);
+        // Normalize to 0-360 range
+        if (angle < 0) angle += 360;
+        return angle;
+    }
+
     function formatDistance(dist) {
         if (dist.calibrated) {
             if (dist.meters >= 1000) return `${(dist.meters / 1000).toFixed(2)} km`;
@@ -287,6 +466,25 @@ const MeasurementTool = (() => {
             return `${(dist.meters * 100).toFixed(1)} cm`;
         }
         return `${Math.round(dist.pixels)} px`;
+    }
+
+    /**
+     * Format measurement label with distance and optionally angle
+     */
+    function formatMeasurementLabel(p1, p2) {
+        const dist = calcDistance(p1, p2);
+        const parts = [];
+        
+        if (config.showDistance) {
+            parts.push(formatDistance(dist));
+        }
+        
+        if (config.showAngle) {
+            const angle = calcAngle(p1, p2);
+            parts.push(`${angle.toFixed(1)}°`);
+        }
+        
+        return parts.join(' | ') || formatDistance(dist);
     }
 
     function getTotalDistance() {
@@ -373,13 +571,25 @@ const MeasurementTool = (() => {
         const mode = currentMode || 'single'; // Default to 'single' if mode is null
 
         const totalDist = getTotalDistance();
+        
+        // Build style info to store with measurement
+        const styleInfo = {
+            configType: currentConfigType,
+            lineStyle: config.lineStyle,
+            lineStrokeWidth: config.lineStrokeWidth,
+            showAngle: config.showAngle,
+            showDistance: config.showDistance,
+            labelScale: config.labelScale
+        };
+        
         const data = {
             name: name.trim(),
             measurement_type: mode,
             points: currentPoints,
             color: config.lineColor,
             total_distance_pixels: totalDist.pixels,
-            total_distance_meters: totalDist.meters
+            total_distance_meters: totalDist.meters,
+            style_info: styleInfo  // Store style configuration
         };
 
         // Add layer_group if provided (null means Ungrouped)
@@ -513,6 +723,7 @@ const MeasurementTool = (() => {
 
             const color = ms.color || config.lineColor;
             const points = ms.points;
+            const groupObjects = [];
 
             // Draw lines
             if (points.length >= 2) {
@@ -524,12 +735,10 @@ const MeasurementTool = (() => {
                             strokeWidth: 2,
                             strokeDashArray: [5, 5],
                             selectable: false,
-                            evented: false,
-                            isSavedMeasurement: true,
-                            measurementSetId: ms.id
+                            evented: false
                         }
                     );
-                    canvas.add(line);
+                    groupObjects.push(line);
                 }
             }
 
@@ -545,12 +754,33 @@ const MeasurementTool = (() => {
                     originX: 'center',
                     originY: 'center',
                     selectable: false,
-                    evented: false,
-                    isSavedMeasurement: true,
-                    measurementSetId: ms.id
+                    evented: false
                 });
-                canvas.add(marker);
+                groupObjects.push(marker);
             });
+
+            // Create a group for all objects in this measurement set
+            // This makes the entire measurement selectable as one unit
+            if (groupObjects.length > 0) {
+                // Only make measurements selectable/evented when canvas selection is enabled (select mode)
+                const isSelectMode = canvas.selection === true;
+                const measurementGroup = new fabric.Group(groupObjects, {
+                    selectable: isSelectMode,
+                    evented: isSelectMode,
+                    hasControls: false,
+                    hasBorders: true,
+                    lockMovementX: true,
+                    lockMovementY: true,
+                    lockRotation: true,
+                    lockScalingX: true,
+                    lockScalingY: true,
+                    hoverCursor: isSelectMode ? 'pointer' : 'default',
+                    isSavedMeasurement: true,
+                    measurementSetId: ms.id,
+                    measurementName: ms.name
+                });
+                canvas.add(measurementGroup);
+            }
         });
 
         bringMeasurementsToFront();
@@ -606,6 +836,14 @@ const MeasurementTool = (() => {
         getTotalDistanceFormatted,
         updatePanel,
         bringMeasurementsToFront,
-        getConfig: () => ({ ...config })
+        // Config management
+        getConfig: () => ({ ...config }),
+        updateConfig,
+        setConfigType,
+        getConfigTypes,
+        getCurrentConfigType,
+        saveConfigType,
+        deleteConfigType,
+        getLineDashArray
     };
 })();
