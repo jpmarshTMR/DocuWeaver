@@ -157,7 +157,7 @@ class LayerGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = LayerGroup
         fields = [
-            'id', 'project', 'name', 'group_type', 'color', 'visible',
+            'id', 'project', 'name', 'group_type', 'scope', 'color', 'visible',
             'parent_group', 'import_batch', 'is_joined',
             'item_count', 'total_items', 'child_groups', 'created_at'
         ]
@@ -176,7 +176,7 @@ class MeasurementSetSerializer(serializers.ModelSerializer):
         model = MeasurementSet
         fields = [
             'id', 'project', 'name', 'measurement_type', 'points',
-            'color', 'visible', 'total_distance_pixels', 'total_distance_meters',
+            'color', 'visible', 'layer_group', 'total_distance_pixels', 'total_distance_meters',
             'created_at'
         ]
         read_only_fields = ['project']

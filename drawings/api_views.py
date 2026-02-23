@@ -677,65 +677,83 @@ def toggle_group_visibility(request, pk):
 
 @api_view(['PATCH'])
 def move_item_to_group(request, pk):
-    """Move an asset, link, or sheet to a different group."""
+    """Move an asset, link, sheet, or measurement to a different group."""
     group = get_object_or_404(LayerGroup, pk=pk)
-    item_type = request.data.get('item_type')  # 'asset', 'link', or 'sheet'
+    item_type = request.data.get('item_type')  # 'asset', 'link', 'sheet', or 'measurement'
     item_id = request.data.get('item_id')
 
     if not item_type or not item_id:
         return Response({'error': 'item_type and item_id are required'}, status=400)
 
+    # Global folders can accept any item type
+    is_global = group.scope == 'global'
+
     if item_type == 'asset':
-        if group.group_type != 'asset':
-            return Response({'error': 'Cannot move asset to a link group'}, status=400)
+        if not is_global and group.group_type != 'asset':
+            return Response({'error': 'Cannot move asset to a non-asset local group'}, status=400)
         item = get_object_or_404(Asset, pk=item_id, project=group.project)
         item.layer_group = group
         item.save()
         return Response({'status': 'moved', 'item_type': 'asset', 'item_id': item_id, 'group_id': pk})
     elif item_type == 'link':
-        if group.group_type != 'link':
-            return Response({'error': 'Cannot move link to an asset group'}, status=400)
+        if not is_global and group.group_type != 'link':
+            return Response({'error': 'Cannot move link to a non-link local group'}, status=400)
         item = get_object_or_404(Link, pk=item_id, project=group.project)
         item.layer_group = group
         item.save()
         return Response({'status': 'moved', 'item_type': 'link', 'item_id': item_id, 'group_id': pk})
     elif item_type == 'sheet':
-        if group.group_type != 'sheet':
-            return Response({'error': 'Cannot move sheet to a non-sheet group'}, status=400)
+        if not is_global and group.group_type != 'sheet':
+            return Response({'error': 'Cannot move sheet to a non-sheet local group'}, status=400)
         item = get_object_or_404(Sheet, pk=item_id, project=group.project)
         item.layer_group = group
         item.save()
         return Response({'status': 'moved', 'item_type': 'sheet', 'item_id': item_id, 'group_id': pk})
+    elif item_type == 'measurement':
+        if not is_global and group.group_type != 'measurement':
+            return Response({'error': 'Cannot move measurement to a non-measurement local group'}, status=400)
+        item = get_object_or_404(MeasurementSet, pk=item_id, project=group.project)
+        item.layer_group = group
+        item.save()
+        return Response({'status': 'moved', 'item_type': 'measurement', 'item_id': item_id, 'group_id': pk})
     else:
-        return Response({'error': 'item_type must be "asset", "link", or "sheet"'}, status=400)
+        return Response({'error': 'item_type must be "asset", "link", "sheet", or "measurement"'}, status=400)
 
 
 @api_view(['POST'])
 def assign_ungrouped_to_group(request, pk):
     """Assign all ungrouped items of a type to this group."""
     group = get_object_or_404(LayerGroup, pk=pk)
-    item_type = request.data.get('item_type')  # 'asset', 'link', or 'sheet'
+    item_type = request.data.get('item_type')  # 'asset', 'link', 'sheet', or 'measurement'
 
     if not item_type:
         return Response({'error': 'item_type is required'}, status=400)
 
+    # Global folders can accept any item type
+    is_global = group.scope == 'global'
+
     if item_type == 'asset':
-        if group.group_type != 'asset':
-            return Response({'error': 'Cannot assign assets to a link group'}, status=400)
+        if not is_global and group.group_type != 'asset':
+            return Response({'error': 'Cannot assign assets to a non-asset local group'}, status=400)
         count = Asset.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
         return Response({'status': 'assigned', 'count': count, 'item_type': 'asset'})
     elif item_type == 'link':
-        if group.group_type != 'link':
-            return Response({'error': 'Cannot assign links to an asset group'}, status=400)
+        if not is_global and group.group_type != 'link':
+            return Response({'error': 'Cannot assign links to a non-link local group'}, status=400)
         count = Link.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
         return Response({'status': 'assigned', 'count': count, 'item_type': 'link'})
     elif item_type == 'sheet':
-        if group.group_type != 'sheet':
-            return Response({'error': 'Cannot assign sheets to a non-sheet group'}, status=400)
+        if not is_global and group.group_type != 'sheet':
+            return Response({'error': 'Cannot assign sheets to a non-sheet local group'}, status=400)
         count = Sheet.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
         return Response({'status': 'assigned', 'count': count, 'item_type': 'sheet'})
+    elif item_type == 'measurement':
+        if not is_global and group.group_type != 'measurement':
+            return Response({'error': 'Cannot assign measurements to a non-measurement local group'}, status=400)
+        count = MeasurementSet.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
+        return Response({'status': 'assigned', 'count': count, 'item_type': 'measurement'})
     else:
-        return Response({'error': 'item_type must be "asset", "link", or "sheet"'}, status=400)
+        return Response({'error': 'item_type must be "asset", "link", "sheet", or "measurement"'}, status=400)
 
 
 @api_view(['POST'])
@@ -743,10 +761,19 @@ def ungroup_all_items(request, pk):
     """Remove all items from a group (make them ungrouped)."""
     group = get_object_or_404(LayerGroup, pk=pk)
 
-    if group.group_type == 'asset':
+    # For global folders, ungroup all types; for local folders, only that type
+    if group.scope == 'global':
+        count = 0
+        count += Asset.objects.filter(layer_group=group).update(layer_group=None)
+        count += Link.objects.filter(layer_group=group).update(layer_group=None)
+        count += Sheet.objects.filter(layer_group=group).update(layer_group=None)
+        count += MeasurementSet.objects.filter(layer_group=group).update(layer_group=None)
+    elif group.group_type == 'asset':
         count = Asset.objects.filter(layer_group=group).update(layer_group=None)
     elif group.group_type == 'sheet':
         count = Sheet.objects.filter(layer_group=group).update(layer_group=None)
+    elif group.group_type == 'measurement':
+        count = MeasurementSet.objects.filter(layer_group=group).update(layer_group=None)
     else:
         count = Link.objects.filter(layer_group=group).update(layer_group=None)
 

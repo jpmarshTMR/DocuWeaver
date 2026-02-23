@@ -1,7 +1,7 @@
 """Django admin configuration for drawings app."""
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ColumnPreset, ImportBatch
+from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ColumnPreset, ImportBatch, MeasurementSet, Link, LayerGroup
 
 
 @admin.register(AssetType)
@@ -130,3 +130,74 @@ class ImportBatchAdmin(admin.ModelAdmin):
     list_display = ['filename', 'project', 'asset_count', 'created_at']
     list_filter = ['project']
     search_fields = ['filename']
+
+
+@admin.register(LayerGroup)
+class LayerGroupAdmin(admin.ModelAdmin):
+    """Admin for managing layer groups (folders for organizing items)."""
+    list_display = ['name', 'project', 'group_type', 'scope', 'item_count']
+    list_filter = ['project', 'group_type', 'scope']
+    search_fields = ['name']
+
+    fieldsets = (
+        (None, {
+            'fields': ('project', 'name', 'group_type', 'scope', 'parent_group', 'visible')
+        }),
+        ('Metadata', {
+            'fields': ('color',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def item_count(self, obj):
+        return obj.item_count or 0
+    item_count.short_description = 'Items'
+
+
+@admin.register(Link)
+class LinkAdmin(admin.ModelAdmin):
+    """Admin for managing links (pipes, cables, etc.)."""
+    list_display = ['link_id', 'name', 'project', 'link_type', 'layer_group']
+    list_filter = ['project', 'link_type']
+    search_fields = ['link_id', 'name']
+
+    fieldsets = (
+        (None, {
+            'fields': ('project', 'link_id', 'name', 'link_type', 'layer_group')
+        }),
+        ('Display', {
+            'fields': ('color', 'width', 'opacity')
+        }),
+        ('Data', {
+            'fields': ('coordinates', 'metadata'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+
+@admin.register(MeasurementSet)
+class MeasurementSetAdmin(admin.ModelAdmin):
+    """Admin for managing saved measurements."""
+    list_display = ['name', 'project', 'measurement_type', 'get_layer_group', 'visible', 'created_at']
+    list_filter = ['project', 'measurement_type', 'visible', 'created_at']
+    search_fields = ['name', 'project__name']
+    readonly_fields = ['created_at', 'total_distance_pixels', 'total_distance_meters']
+
+    fieldsets = (
+        (None, {
+            'fields': ('project', 'name', 'measurement_type', 'layer_group')
+        }),
+        ('Data', {
+            'fields': ('points', 'color', 'visible')
+        }),
+        ('Calculated', {
+            'fields': ('total_distance_pixels', 'total_distance_meters', 'created_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def get_layer_group(self, obj):
+        """Display the layer group name or 'Ungrouped'."""
+        return obj.layer_group.name if obj.layer_group else 'Ungrouped'
+    get_layer_group.short_description = 'Folder'

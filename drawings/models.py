@@ -361,8 +361,16 @@ class LayerGroup(models.Model):
         ('asset', 'Asset Group'),
         ('link', 'Link Group'),
         ('sheet', 'Sheet Group'),
+        ('measurement', 'Measurement Group'),
     ]
-    group_type = models.CharField(max_length=10, choices=GROUP_TYPE_CHOICES)
+    group_type = models.CharField(max_length=15, choices=GROUP_TYPE_CHOICES)
+
+    # Scope determines if folder is visible only in its section (local) or shared across sections (global)
+    SCOPE_CHOICES = [
+        ('local', 'Local - Only visible in its own section'),
+        ('global', 'Global - Shared across all sections'),
+    ]
+    scope = models.CharField(max_length=10, choices=SCOPE_CHOICES, default='local', help_text="Whether this folder is local to one section or global")
 
     color = models.CharField(max_length=7, default='#3498db', help_text="Color for UI display")
     visible = models.BooleanField(default=True)
@@ -401,10 +409,22 @@ class LayerGroup(models.Model):
     @property
     def item_count(self):
         """Return count of items directly in this group."""
+        # Global folders can contain items of any type
+        if self.scope == 'global':
+            count = 0
+            count += self.assets.count()
+            count += self.sheets_in_group.count()
+            count += self.links_in_group.count()
+            count += self.measurements_in_group.count()
+            return count
+        
+        # Local folders only count their own type
         if self.group_type == 'asset':
             return self.assets.count()
         elif self.group_type == 'sheet':
             return self.sheets_in_group.count()
+        elif self.group_type == 'measurement':
+            return self.measurements_in_group.count()
         else:
             return self.links_in_group.count()
 
@@ -427,6 +447,15 @@ class MeasurementSet(models.Model):
         ('chain', 'Chain Measurement'),
     ]
     measurement_type = models.CharField(max_length=10, choices=MEASUREMENT_TYPE_CHOICES, default='single')
+
+    # Layer group for organizing measurements into folders
+    layer_group = models.ForeignKey(
+        'LayerGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='measurements_in_group'
+    )
 
     # Points stored as array of {x, y} objects
     points = models.JSONField(default=list, help_text="Array of {x, y} canvas coordinate points")

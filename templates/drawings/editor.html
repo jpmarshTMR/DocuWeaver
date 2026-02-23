@@ -528,6 +528,23 @@
         opacity: 0.5;
     }
 
+    /* Global folder styling */
+    .global-folder {
+        border-left: 2px solid #17a2b8;
+        padding-left: 4px;
+        margin-left: -6px;
+    }
+
+    .global-folder .folder-icon {
+        color: #17a2b8;
+    }
+
+    /* Drop target highlight */
+    .drop-target-active {
+        background: rgba(23, 162, 184, 0.2) !important;
+        border-radius: 4px;
+    }
+
     .item-indicator {
         margin-right: 6px;
         font-size: 0.75rem;
@@ -944,6 +961,39 @@
         float: right;
     }
     .asset-delete-btn:hover { opacity: 1; }
+
+    /* Notification toast styles */
+    .notification-toast {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        max-width: 400px;
+        background: #323232;
+        color: #ffffff;
+        padding: 16px 24px;
+        border-radius: 4px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        font-size: 14px;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(-20px);
+        transition: all 0.3s ease;
+        z-index: 10000;
+    }
+    .notification-toast.show {
+        opacity: 1;
+        transform: translateY(0);
+        pointer-events: auto;
+    }
+    .notification-toast.success {
+        background: #4caf50;
+    }
+    .notification-toast.error {
+        background: #f44336;
+    }
+    .notification-toast.info {
+        background: #2196f3;
+    }
 </style>
 {% endblock %}
 
@@ -1019,10 +1069,16 @@
                 <span>Straight line:</span>
                 <span id="measure-straight">--</span>
             </div>
-            <button class="tool-btn" style="margin-top: 0.5rem; font-size: 0.85em; text-align: center; width: 100%;"
-                    onclick="clearMeasurements()">
-                Clear Measurements
-            </button>
+            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                <button class="tool-btn" style="flex: 1; font-size: 0.85em;"
+                        onclick="saveMeasurementPrompt()">
+                    💾 Save
+                </button>
+                <button class="tool-btn" style="flex: 1; font-size: 0.85em;"
+                        onclick="clearMeasurements()">
+                    Clear
+                </button>
+            </div>
         </div>
 
         <!-- Import/Add Dropdown -->
@@ -1054,7 +1110,7 @@
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('sheets')">
                     <span class="layer-group-chevron" id="sheets-chevron">&#9660;</span>
-                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">Sheets</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📄 Sheets</span>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all sheets">
                         <input type="checkbox" id="sheets-group-vis" checked onchange="toggleGroupVisibility('sheets', this.checked)">
                     </label>
@@ -1072,7 +1128,7 @@
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('assets')">
                     <span class="layer-group-chevron" id="assets-chevron">&#9660;</span>
-                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">Assets</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📍 Assets</span>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all assets">
                         <input type="checkbox" id="assets-group-vis" checked onchange="toggleGroupVisibility('assets', this.checked)">
                     </label>
@@ -1155,7 +1211,7 @@
             <div class="layer-group">
                 <div class="layer-group-header" onclick="toggleLayerGroup('links')">
                     <span class="layer-group-chevron" id="links-chevron">&#9660;</span>
-                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">Links</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">🔗 Links</span>
                     <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all links">
                         <input type="checkbox" id="links-group-vis" checked onchange="toggleGroupVisibility('links', this.checked)">
                     </label>
@@ -1172,6 +1228,41 @@
                     
                     <div id="link-import-batches"></div>
                 </div><!-- /links-group-body -->
+            </div><!-- /layer-group -->
+        </div>
+
+        <!-- Measurements Layer Group -->
+        <div class="tool-section">
+            <div class="layer-group">
+                <div class="layer-group-header" onclick="toggleLayerGroup('measurements')">
+                    <span class="layer-group-chevron" id="measurements-chevron">&#9660;</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📐 Measurements</span>
+                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle all measurements">
+                        <input type="checkbox" id="measurements-group-vis" checked onchange="toggleGroupVisibility('measurements', this.checked)">
+                    </label>
+                </div>
+                <div class="layer-group-body" id="measurements-group-body">
+                    <!-- Measurement Groups (includes Ungrouped folder) -->
+                    <div id="measurement-groups-list" style="max-height: 300px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
+                    <button class="btn" style="width: 100%; font-size: 0.8rem; padding: 0.3rem;" onclick="showCreateGroupModal('measurement')">
+                        📁 New Folder
+                    </button>
+                </div><!-- /measurements-group-body -->
+            </div><!-- /layer-group -->
+
+            <!-- Unified View -->
+            <div class="layer-group">
+                <div class="layer-group-header" onclick="toggleLayerGroup('unified')">
+                    <span class="layer-group-chevron" id="unified-chevron">&#9654;</span>
+                    <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">📋 Unified View</span>
+                    <label onclick="event.stopPropagation();" style="cursor: pointer; font-size: 0.85rem;" title="Toggle unified view">
+                        <input type="checkbox" id="unified-group-vis" checked onchange="toggleGroupVisibility('unified', this.checked)">
+                    </label>
+                </div>
+                <div class="layer-group-body collapsed" id="unified-group-body">
+                    <!-- Unified list showing all items from all types -->
+                    <div id="unified-items-list" style="max-height: 400px; overflow-y: auto; margin-bottom: 0.5rem;"></div>
+                </div><!-- /unified-group-body -->
             </div><!-- /layer-group -->
         </div>
 
@@ -1213,6 +1304,7 @@
             <button class="ftool-btn" data-mode="calibrate" onclick="setMode('calibrate')" title="Calibrate Scale">📏</button>
         </div>
 
+        <div id="notification-toast" class="notification-toast"></div>
         <div id="canvas-container"></div>
 
         <div class="status-bar" id="status-bar">
@@ -1324,6 +1416,14 @@
                 <select id="group-parent" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
                     <option value="">None (Root level)</option>
                 </select>
+            </div>
+            <div class="form-group">
+                <label>Visibility Scope</label>
+                <select id="group-scope" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
+                    <option value="local" selected>Local - Only in this section</option>
+                    <option value="global">Global - Visible in all sections</option>
+                </select>
+                <small style="display: block; margin-top: 0.3rem; color: var(--text-secondary);">Local folders only appear in their own section (Sheets, Assets, Links, or Measurements). Global folders appear in all sections.</small>
             </div>
             <div style="display: flex; gap: 1rem; justify-content: flex-end;">
                 <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideCreateGroupModal()">Cancel</button>
@@ -1455,6 +1555,29 @@
     </div>
 </div>
 
+<!-- Save Measurement Modal -->
+<div id="saveMeasurementModal" class="modal">
+    <div class="modal-content">
+        <h2 style="margin-bottom: 1rem;">Save Measurement</h2>
+        <form id="saveMeasurementForm">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="measurement-name" required placeholder="e.g., Driveway Length">
+            </div>
+            <div class="form-group">
+                <label>Folder</label>
+                <select id="measurement-folder" style="width: 100%; padding: 0.4rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-input); color: var(--text-primary);">
+                    <option value="">Ungrouped</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideSaveMeasurementModal()">Cancel</button>
+                <button type="submit" class="btn btn-success">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 {% csrf_token %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
 <script>
@@ -1477,6 +1600,8 @@
         osm_z_index: {{ project.osm_z_index }}
     };
 </script>
+<script src="{% static 'js/tool_section_item.js' %}"></script>
+<script src="{% static 'js/measurement_tool.js' %}"></script>
 <script src="{% static 'js/canvas_editor.js' %}"></script>
 <script>
     // Sync dark mode toggle icon and auto-invert PDFs

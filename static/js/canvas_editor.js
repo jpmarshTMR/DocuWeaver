@@ -118,6 +118,7 @@ let isPdfInverted = false;
 let assetGroups = [];  // Asset layer groups
 let linkGroups = [];   // Link layer groups
 let sheetGroups = [];  // Sheet layer groups
+let measurementGroups = [];  // Measurement layer groups
 
 // OpenStreetMap layer state
 let osmTiles = [];       // Array of fabric.Image objects for OSM tiles
@@ -297,6 +298,10 @@ async function undoClearCut(data) {
 // Initialize canvas
 document.addEventListener('DOMContentLoaded', function() {
     initCanvas();
+    
+    // Initialize MeasurementTool
+    MeasurementTool.init(canvas, PROJECT_ID);
+    
     loadProjectData().then(() => {
         // Restore viewport state after project data is loaded
         // Use a timeout to ensure canvas is fully rendered
@@ -398,8 +403,8 @@ function initCanvas() {
             return true;
         }
         
-        // Always render measurements
-        if (this.isMeasurement || this.isMeasurementGroup) {
+        // Always render measurements (both active and saved)
+        if (this.isMeasurement || this.isMeasurementGroup || this.isSavedMeasurement) {
             return true;
         }
         
@@ -478,14 +483,21 @@ function setupCanvasEvents() {
             };
         }
 
-        // Middle click (button 1) pans regardless of mode
+        // Middle click (button 1) - ends chain measurement or pans
         if (evt.button === 1) {
             evt.preventDefault();
-            isMiddleClickPanning = true;
-            lastPosX = evt.clientX;
-            lastPosY = evt.clientY;
-            canvas.defaultCursor = 'grabbing';
-            console.log('Middle-click panning started');
+            if (currentMode === 'measure' && MeasurementTool.getCurrentMode() === 'chain') {
+                // End the chain measurement when middle-clicking
+                MeasurementTool.endMeasurement();
+                console.log('Chain measurement ended via middle-click');
+            } else {
+                // Otherwise, start middle-click panning
+                isMiddleClickPanning = true;
+                lastPosX = evt.clientX;
+                lastPosY = evt.clientY;
+                canvas.defaultCursor = 'grabbing';
+                console.log('Middle-click panning started');
+            }
             return;
         }
 
@@ -549,8 +561,9 @@ function setupCanvasEvents() {
         }
 
         // Handle measurement live preview
-        if (currentMode === 'measure') {
-            handleMeasureMove(opt);
+        if (currentMode === 'measure' && MeasurementTool.getCurrentMode()) {
+            const pointer = canvas.getPointer(opt.e);
+            MeasurementTool.handleMouseMove(pointer.x, pointer.y);
         }
     });
 
@@ -825,18 +838,36 @@ function setMode(mode) {
     document.getElementById('current-mode').textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
 }
 
+// ==================== Notification System ====================
+
+function showToast(message, type = 'info', duration = 3000) {
+    const toast = document.getElementById('notification-toast');
+    if (!toast) return;
+
+    toast.textContent = message;
+    toast.className = `notification-toast show ${type}`;
+    
+    // Auto-hide after duration
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, duration);
+}
+
+// ==================== Data Loading ====================
+
 // Data Loading
 async function loadProjectData() {
     try {
         // Load ALL data in parallel FIRST (including layer groups)
         // This ensures group structure is known before rendering anything
-        const [sheetsResponse, assetsResponse, linksResponse, assetGroupsResponse, linkGroupsResponse, sheetGroupsResponse] = await Promise.all([
+        const [sheetsResponse, assetsResponse, linksResponse, assetGroupsResponse, linkGroupsResponse, sheetGroupsResponse, measurementGroupsResponse] = await Promise.all([
             fetch(`/api/projects/${PROJECT_ID}/sheets/`),
             fetch(`/api/projects/${PROJECT_ID}/assets/`),
             fetch(`/api/projects/${PROJECT_ID}/links/`),
             fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=asset`),
             fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=link`),
-            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=sheet`)
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=sheet`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=measurement`)
         ]);
 
         // Parse all responses
@@ -860,9 +891,12 @@ async function loadProjectData() {
         if (sheetGroupsResponse.ok) {
             sheetGroups = await sheetGroupsResponse.json();
         }
+        if (measurementGroupsResponse.ok) {
+            measurementGroups = await measurementGroupsResponse.json();
+        }
 
         // Initialize visibility from loaded group data
-        [...assetGroups, ...linkGroups, ...sheetGroups].forEach(g => {
+        [...assetGroups, ...linkGroups, ...sheetGroups, ...measurementGroups].forEach(g => {
             groupVisibility[g.id] = g.visible;
         });
 
@@ -879,9 +913,13 @@ async function loadProjectData() {
         // Render layer groups UI (groups already loaded above)
         renderLayerGroupsUI();
         
-        // Load measurement sets
-        await loadMeasurementSets();
-        renderSavedMeasurementsOnCanvas();
+        // Load and render measurement sets with groups
+        await MeasurementTool.loadSaved();
+        MeasurementTool.renderSaved();
+        await renderMeasurementGroupList();
+        
+        // Store measurement groups in PROJECT_DATA for modal access
+        PROJECT_DATA.measurementGroups = measurementGroups;
 
         // Initialize OSM layer settings from project data
         osmEnabled = PROJECT_DATA.osm_enabled || false;
@@ -1077,6 +1115,9 @@ function reorderSheetsByZIndex() {
     for (let i = sheetObjects.length - 1; i >= 0; i--) {
         canvas.sendToBack(sheetObjects[i]);
     }
+
+    // Bring measurements to front after reordering sheets
+    bringMeasurementsToFront();
 
     canvas.renderAll();
     console.log('Sheets reordered by z_index:', sheetObjects.map(o => ({
@@ -1608,6 +1649,9 @@ function addOSMTileToCanvas(dataUrl, tileX, tileY, zoom) {
         
         // Set z-index ordering
         applyOSMZIndex();
+        
+        // Bring measurements to front (they should always be visible on top)
+        bringMeasurementsToFront();
         
         canvas.renderAll();
     }, { crossOrigin: 'anonymous' });
@@ -2380,13 +2424,85 @@ async function deleteSelectedSheet() {
             renderSheetLayers();
 
             console.log('Sheet deleted:', sheetName);
+            if (typeof showToast === 'function') {
+                showToast(`Sheet "${sheetName}" deleted`, 'success');
+            }
+            return true;
         } else {
             const error = await response.json();
-            alert('Error deleting sheet: ' + JSON.stringify(error));
+            if (typeof showToast === 'function') {
+                showToast('Error deleting sheet: ' + JSON.stringify(error), 'error');
+            } else {
+                alert('Error deleting sheet: ' + JSON.stringify(error));
+            }
+            return false;
         }
     } catch (error) {
         console.error('Error deleting sheet:', error);
-        alert('Error deleting sheet');
+        if (typeof showToast === 'function') {
+            showToast('Error deleting sheet', 'error');
+        } else {
+            alert('Error deleting sheet');
+        }
+        return false;
+    }
+}
+
+/**
+ * Delete a sheet by ID (used by unified ToolSectionItem module)
+ */
+async function deleteSheet(sheetId, sheetName) {
+    if (!confirm(`Delete sheet "${sheetName}"? This cannot be undone.`)) return false;
+
+    try {
+        const response = await fetch(`/api/sheets/${sheetId}/`, {
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': getCSRFToken() }
+        });
+
+        if (response.ok || response.status === 204) {
+            // Remove from canvas
+            canvas.getObjects().forEach(obj => {
+                if (obj.sheetData && obj.sheetData.id === sheetId) {
+                    canvas.remove(obj);
+                }
+            });
+            canvas.renderAll();
+
+            // Remove from local data
+            const index = sheets.findIndex(s => s.id === sheetId);
+            if (index >= 0) {
+                sheets.splice(index, 1);
+            }
+
+            // Clear cut data for this sheet
+            delete sheetCutData[sheetId];
+
+            // Clear selection if this was selected
+            if (selectedSheet && selectedSheet.id === sheetId) {
+                clearSelection();
+            }
+            
+            // Refresh UI
+            renderSheetLayers();
+            renderSheetGroupList();
+            
+            if (typeof showToast === 'function') {
+                showToast(`Sheet "${sheetName}" deleted`, 'success');
+            }
+            return true;
+        } else {
+            if (typeof showToast === 'function') {
+                showToast('Failed to delete sheet', 'error');
+            }
+            return false;
+        }
+    } catch (error) {
+        console.error('Error deleting sheet:', error);
+        if (typeof showToast === 'function') {
+            showToast('Error deleting sheet', 'error');
+        }
+        return false;
     }
 }
 
@@ -2860,12 +2976,24 @@ function formatMeasureDistance(dist) {
     return `${Math.round(dist.pixels)} px`;
 }
 
+/**
+ * Bring all measurements (active and saved) to the front of the canvas.
+ * This ensures they're always visible above other layers.
+ */
+function bringMeasurementsToFront() {
+    const measurements = canvas.getObjects().filter(obj => 
+        obj.isMeasurement || obj.isMeasurementGroup || obj.isSavedMeasurement
+    );
+    measurements.forEach(m => canvas.bringToFront(m));
+}
+
 function removeMeasurePreview() {
     if (measurePreviewLine) { canvas.remove(measurePreviewLine); measurePreviewLine = null; }
     if (measurePreviewLabel) { canvas.remove(measurePreviewLabel); measurePreviewLabel = null; }
 }
 
 function clearMeasurements() {
+    MeasurementTool.clearCurrent();
     measureOverlays.forEach(obj => canvas.remove(obj));
     measureOverlays = [];
     removeMeasurePreview();
@@ -2876,6 +3004,7 @@ function clearMeasurements() {
 
 function toggleMeasureMode(mode) {
     measureMode = mode;
+    MeasurementTool.startMeasurement(mode);
     clearMeasurements();
 }
 
@@ -2885,92 +3014,18 @@ function toggleMeasurePanel() {
     if (isVisible) {
         if (section) section.style.display = 'none';
         clearMeasurements();
+        MeasurementTool.clearCurrent();
         setMode('pan');
         return;
     }
     if (section) section.style.display = 'block';
+    MeasurementTool.startMeasurement(measureMode);
     setMode('measure');
 }
 
 function handleMeasureClick(opt) {
-    // In single mode, auto-clear on 3rd click
-    if (measureMode === 'single' && measurePoints.length >= 2) {
-        clearMeasurements();
-    }
-
     const pointer = canvas.getPointer(opt.e);
-
-    // Skip zero-length segments
-    if (measurePoints.length > 0) {
-        const last = measurePoints[measurePoints.length - 1];
-        const dx = pointer.x - last.x, dy = pointer.y - last.y;
-        if (Math.sqrt(dx * dx + dy * dy) < 2) return;
-    }
-
-    measurePoints.push({ x: pointer.x, y: pointer.y });
-
-    // Draw point marker
-    const marker = new fabric.Circle({
-        radius: 4,
-        fill: '#00bcd4',
-        stroke: '#ffffff',
-        strokeWidth: 1,
-        left: pointer.x,
-        top: pointer.y,
-        originX: 'center',
-        originY: 'center',
-        selectable: false,
-        evented: false
-    });
-    canvas.add(marker);
-    canvas.bringToFront(marker);
-    measureOverlays.push(marker);
-
-    const n = measurePoints.length;
-    if (n >= 2) {
-        const p1 = measurePoints[n - 2];
-        const p2 = measurePoints[n - 1];
-
-        // Draw segment line (dashed)
-        const segLine = new fabric.Line([p1.x, p1.y, p2.x, p2.y], {
-            stroke: '#00bcd4',
-            strokeWidth: 1.5,
-            strokeUniform: true,
-            strokeDashArray: [8, 4],
-            selectable: false,
-            evented: false
-        });
-        canvas.add(segLine);
-        canvas.bringToFront(segLine);
-        measureOverlays.push(segLine);
-
-        // Draw segment distance label at midpoint
-        const dist = calcMeasureDistance(p1, p2);
-        const midX = (p1.x + p2.x) / 2;
-        const midY = (p1.y + p2.y) / 2;
-        const segLabel = new fabric.Text(formatMeasureDistance(dist), {
-            left: midX,
-            top: midY - 18,
-            fontSize: 12,
-            fill: '#ffffff',
-            backgroundColor: 'rgba(0, 188, 212, 0.85)',
-            fontFamily: 'monospace',
-            padding: 3,
-            selectable: false,
-            evented: false
-        });
-        canvas.add(segLabel);
-        canvas.bringToFront(segLabel);
-        measureOverlays.push(segLabel);
-    }
-
-    // In single mode with 2 points, remove preview
-    if (measureMode === 'single' && n >= 2) {
-        removeMeasurePreview();
-    }
-
-    updateMeasurePanel();
-    canvas.renderAll();
+    MeasurementTool.addPoint(pointer.x, pointer.y);
 }
 
 function handleMeasureMove(opt) {
@@ -2985,7 +3040,8 @@ function handleMeasureMove(opt) {
         measurePreviewLine = new fabric.Line(
             [lastPt.x, lastPt.y, pointer.x, pointer.y],
             { stroke: '#00bcd4', strokeWidth: 1, strokeUniform: true,
-              strokeDashArray: [4, 4], opacity: 0.6, selectable: false, evented: false }
+              strokeDashArray: [4, 4], opacity: 0.6, selectable: false, evented: false,
+              isMeasurement: true }  // Mark as measurement
         );
         canvas.add(measurePreviewLine);
     } else {
@@ -3002,7 +3058,8 @@ function handleMeasureMove(opt) {
         measurePreviewLabel = new fabric.Text(label, {
             left: midX, top: midY - 18, fontSize: 11, fill: '#ffffff',
             backgroundColor: 'rgba(0, 188, 212, 0.5)', fontFamily: 'monospace',
-            padding: 3, selectable: false, evented: false
+            padding: 3, selectable: false, evented: false,
+            isMeasurement: true  // Mark as measurement
         });
         canvas.add(measurePreviewLabel);
     } else {
@@ -3298,6 +3355,18 @@ function toggleGroupVisibility(groupName, visible) {
     } else if (groupName === 'links') {
         canvas.getObjects().forEach(obj => {
             if (obj.isLinkObject) obj.visible = visible;
+        });
+    } else if (groupName === 'measurements') {
+        // Toggle all measurement objects
+        canvas.getObjects().forEach(obj => {
+            if (obj.measurementData || obj.isMeasurement) obj.visible = visible;
+        });
+    } else if (groupName === 'unified') {
+        // Toggle all objects (sheets, assets, links, measurements)
+        canvas.getObjects().forEach(obj => {
+            if (obj.sheetData || obj.assetData || obj.isLinkObject || obj.measurementData || obj.isMeasurement) {
+                obj.visible = visible;
+            }
         });
     }
     canvas.renderAll();
@@ -5199,7 +5268,7 @@ async function deleteImportBatch(batchId, filename) {
 }
 
 async function deleteAsset(assetId, assetLabel) {
-    if (!confirm(`Delete asset "${assetLabel}"?`)) return;
+    if (!confirm(`Delete asset "${assetLabel}"?`)) return false;
 
     try {
         const resp = await fetch(`/api/assets/${assetId}/`, {
@@ -5207,8 +5276,12 @@ async function deleteAsset(assetId, assetLabel) {
             headers: { 'X-CSRFToken': getCSRFToken() }
         });
         if (!resp.ok) {
-            alert('Failed to delete asset');
-            return;
+            if (typeof showToast === 'function') {
+                showToast('Failed to delete asset', 'error');
+            } else {
+                alert('Failed to delete asset');
+            }
+            return false;
         }
         // Reload assets
         const assetsResp = await fetch(`/api/projects/${PROJECT_ID}/assets/`);
@@ -5216,9 +5289,57 @@ async function deleteAsset(assetId, assetLabel) {
         renderAssetList();
         refreshAssets();
         renderImportBatches();
+        if (typeof showToast === 'function') {
+            showToast(`Asset "${assetLabel}" deleted`, 'success');
+        }
+        return true;
     } catch (err) {
         console.error('Error deleting asset:', err);
-        alert('Error deleting asset');
+        if (typeof showToast === 'function') {
+            showToast('Error deleting asset', 'error');
+        } else {
+            alert('Error deleting asset');
+        }
+        return false;
+    }
+}
+
+/**
+ * Delete a single link
+ */
+async function deleteLink(linkId, linkLabel) {
+    if (!confirm(`Delete link "${linkLabel}"?`)) return false;
+
+    try {
+        const resp = await fetch(`/api/links/${linkId}/`, {
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': getCSRFToken() }
+        });
+        if (!resp.ok) {
+            if (typeof showToast === 'function') {
+                showToast('Failed to delete link', 'error');
+            } else {
+                alert('Failed to delete link');
+            }
+            return false;
+        }
+        // Reload links
+        const linksResp = await fetch(`/api/projects/${PROJECT_ID}/links/`);
+        links = await linksResp.json();
+        renderLinkList();
+        renderLinkGroupList();
+        if (typeof showToast === 'function') {
+            showToast(`Link "${linkLabel}" deleted`, 'success');
+        }
+        return true;
+    } catch (err) {
+        console.error('Error deleting link:', err);
+        if (typeof showToast === 'function') {
+            showToast('Error deleting link', 'error');
+        } else {
+            alert('Error deleting link');
+        }
+        return false;
     }
 }
 
@@ -5244,6 +5365,8 @@ function showCreateGroupModal(groupType) {
         groups = assetGroups;
     } else if (groupType === 'sheet') {
         groups = sheetGroups;
+    } else if (groupType === 'measurement') {
+        groups = measurementGroups;
     } else {
         groups = linkGroups;
     }
@@ -5275,6 +5398,7 @@ async function createLayerGroup(e) {
     const groupType = document.getElementById('group-type').value;
     const name = document.getElementById('group-name').value;
     const parentId = document.getElementById('group-parent').value;
+    const scope = document.getElementById('group-scope').value || 'local';
 
     try {
         const resp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/`, {
@@ -5286,6 +5410,7 @@ async function createLayerGroup(e) {
             body: JSON.stringify({
                 name: name,
                 group_type: groupType,
+                scope: scope,
                 parent_group: parentId || null
             })
         });
@@ -5316,26 +5441,29 @@ document.addEventListener('DOMContentLoaded', function() {
  */
 async function loadLayerGroups() {
     try {
-        // Load asset groups
-        const assetResp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=asset`);
+        // Load all group types in parallel
+        const [assetResp, linkResp, sheetResp, measurementResp] = await Promise.all([
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=asset`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=link`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=sheet`),
+            fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=measurement`)
+        ]);
+
         if (assetResp.ok) {
             assetGroups = await assetResp.json();
         }
-
-        // Load link groups
-        const linkResp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=link`);
         if (linkResp.ok) {
             linkGroups = await linkResp.json();
         }
-
-        // Load sheet groups
-        const sheetResp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/?type=sheet`);
         if (sheetResp.ok) {
             sheetGroups = await sheetResp.json();
         }
+        if (measurementResp.ok) {
+            measurementGroups = await measurementResp.json();
+        }
 
         // Initialize visibility from loaded data
-        [...assetGroups, ...linkGroups, ...sheetGroups].forEach(g => {
+        [...assetGroups, ...linkGroups, ...sheetGroups, ...measurementGroups].forEach(g => {
             groupVisibility[g.id] = g.visible;
         });
 
@@ -5352,6 +5480,81 @@ function renderLayerGroupsUI() {
     renderAssetGroupList();
     renderLinkGroupList();
     renderSheetGroupList();
+    renderMeasurementGroupList();
+    renderUnifiedList();
+}
+
+/**
+ * Get all global groups from all types (for cross-section display)
+ */
+function getAllGlobalGroups() {
+    const allGroups = [...assetGroups, ...linkGroups, ...sheetGroups, ...measurementGroups];
+    return allGroups.filter(g => g.scope === 'global' && !g.parent_group);
+}
+
+/**
+ * Render the unified list showing all items from all types
+ */
+function renderUnifiedList() {
+    const container = document.getElementById('unified-items-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // Get all items from all types
+    const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
+    
+    // Create sections for each type
+    const sections = [
+        { type: 'sheet', items: sheets, icon: '📄', label: 'Sheets' },
+        { type: 'asset', items: assets, icon: '📍', label: 'Assets' },
+        { type: 'link', items: links, icon: '🔗', label: 'Links' },
+        { type: 'measurement', items: savedMeasurements, icon: '📐', label: 'Measurements' }
+    ];
+
+    sections.forEach(section => {
+        if (section.items.length === 0) return;
+
+        // Section header
+        const sectionHeader = document.createElement('div');
+        sectionHeader.className = 'unified-section-header';
+        sectionHeader.style.cssText = `
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            padding: 4px 8px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            margin: 4px 0 2px 0;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        `;
+        sectionHeader.innerHTML = `<span>${section.icon}</span> ${section.label} (${section.items.length})`;
+        container.appendChild(sectionHeader);
+
+        // Render items using ToolSectionItem with icons shown
+        section.items.forEach(item => {
+            if (typeof ToolSectionItem !== 'undefined') {
+                const itemDiv = ToolSectionItem.create(item, section.type, { showIcon: true });
+                container.appendChild(itemDiv);
+            } else {
+                // Fallback
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'unified-item';
+                itemDiv.textContent = item.name || item.asset_id || 'Unnamed';
+                container.appendChild(itemDiv);
+            }
+        });
+    });
+
+    // If no items at all, show message
+    if (container.children.length === 0) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.style.cssText = 'padding: 8px; color: var(--text-muted); font-size: 0.8rem; text-align: center;';
+        emptyMsg.textContent = 'No items yet';
+        container.appendChild(emptyMsg);
+    }
 }
 
 /**
@@ -5372,10 +5575,17 @@ function renderAssetGroupList() {
         container.appendChild(ungroupedDiv);
     }
 
-    // Render user-created groups (only root level, children rendered recursively)
-    const rootGroups = assetGroups.filter(g => !g.parent_group);
-    rootGroups.forEach(group => {
+    // Render local asset groups
+    const localGroups = assetGroups.filter(g => !g.parent_group && g.group_type === 'asset' && g.scope === 'local');
+    localGroups.forEach(group => {
         const div = createGroupItem(group, 'asset', 0);
+        container.appendChild(div);
+    });
+
+    // Render all global groups (from any type) so items can be dragged into them
+    const globalGroups = getAllGlobalGroups();
+    globalGroups.forEach(group => {
+        const div = createGroupItem(group, 'asset', 0, true); // true = isGlobalCrossType
         container.appendChild(div);
     });
 }
@@ -5398,10 +5608,57 @@ function renderLinkGroupList() {
         container.appendChild(ungroupedDiv);
     }
 
-    // Render user-created groups (only root level, children rendered recursively)
-    const rootGroups = linkGroups.filter(g => !g.parent_group);
-    rootGroups.forEach(group => {
+    // Render local link groups
+    const localGroups = linkGroups.filter(g => !g.parent_group && g.group_type === 'link' && g.scope === 'local');
+    localGroups.forEach(group => {
         const div = createGroupItem(group, 'link', 0);
+        container.appendChild(div);
+    });
+
+    // Render all global groups (from any type) so items can be dragged into them
+    const globalGroups = getAllGlobalGroups();
+    globalGroups.forEach(group => {
+        const div = createGroupItem(group, 'link', 0, true); // true = isGlobalCrossType
+        container.appendChild(div);
+    });
+}
+
+/**
+ * Render measurement groups in the sidebar
+ */
+async function renderMeasurementGroupList() {
+    const container = document.getElementById('measurement-groups-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // Load saved measurements (wait for async load)
+    if (MeasurementTool && typeof MeasurementTool.loadSaved === 'function') {
+        await MeasurementTool.loadSaved();
+    }
+
+    const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
+
+    // Count ungrouped measurements
+    const ungroupedMeasurements = savedMeasurements.filter(m => !m.layer_group);
+    
+    // Only show "Ungrouped" folder if there are ungrouped items
+    if (ungroupedMeasurements.length > 0) {
+        const ungroupedDiv = createUngroupedFolder('measurement', ungroupedMeasurements.length);
+        container.appendChild(ungroupedDiv);
+    }
+
+    // Render local measurement groups
+    const localGroups = measurementGroups.filter(g => !g.parent_group && g.group_type === 'measurement' && g.scope === 'local');
+    localGroups.forEach(group => {
+        const div = createGroupItem(group, 'measurement', 0);
+        container.appendChild(div);
+    });
+
+    // Render all global groups (from any type) so items can be dragged into them
+    const globalGroups = getAllGlobalGroups();
+    globalGroups.forEach(group => {
+        const div = createGroupItem(group, 'measurement', 0, true); // true = isGlobalCrossType
         container.appendChild(div);
     });
 }
@@ -5415,8 +5672,9 @@ function renderSheetGroupList() {
 
     container.innerHTML = '';
 
-    // Check if there are any sheet groups created
-    const hasSheetGroups = sheetGroups && sheetGroups.length > 0;
+    // Check if there are any sheet groups created or global groups
+    const globalGroups = getAllGlobalGroups();
+    const hasSheetGroups = (sheetGroups && sheetGroups.length > 0) || globalGroups.length > 0;
     
     // Count ungrouped sheets
     const ungroupedSheets = sheets.filter(s => !s.layer_group);
@@ -5428,10 +5686,16 @@ function renderSheetGroupList() {
             container.appendChild(ungroupedDiv);
         }
 
-        // Render user-created groups (only root level, children rendered recursively)
-        const rootGroups = sheetGroups.filter(g => !g.parent_group);
-        rootGroups.forEach(group => {
+        // Render local sheet groups
+        const localGroups = sheetGroups.filter(g => !g.parent_group && g.scope === 'local');
+        localGroups.forEach(group => {
             const div = createGroupItem(group, 'sheet', 0);
+            container.appendChild(div);
+        });
+
+        // Render all global groups (from any type) so items can be dragged into them
+        globalGroups.forEach(group => {
+            const div = createGroupItem(group, 'sheet', 0, true); // true = isGlobalCrossType
             container.appendChild(div);
         });
     } else {
@@ -5468,47 +5732,28 @@ function renderSheetGroupList() {
 /**
  * Create a sheet item element for display in folders
  */
+/**
+ * Create a sheet item element using the unified ToolSectionItem module
+ */
 function createSheetItem(sheet) {
+    // Use the unified ToolSectionItem module if available
+    if (typeof ToolSectionItem !== 'undefined') {
+        return ToolSectionItem.create(sheet, 'sheet');
+    }
+    
+    // Fallback implementation
     const div = document.createElement('div');
     div.className = 'folder-item-entry sheet-item';
     div.dataset.sheetId = sheet.id;
     div.draggable = true;
 
-    // Checkbox for visibility
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.className = 'layer-visibility';
-    checkbox.checked = true;
-    checkbox.addEventListener('change', function(e) {
-        e.stopPropagation();
-        toggleSheetVisibility(sheet.id, this.checked);
-    });
-
     const nameSpan = document.createElement('span');
     nameSpan.className = 'item-name';
     nameSpan.textContent = sheet.name;
 
-    div.appendChild(checkbox);
     div.appendChild(nameSpan);
 
-    // Click to select sheet
-    div.addEventListener('click', (e) => {
-        if (e.target.type !== 'checkbox') {
-            selectSheet(sheet.id);
-        }
-    });
-
-    // Drag handlers for moving between folders
-    div.addEventListener('dragstart', (e) => {
-        draggedItem = { type: 'sheet', id: sheet.id, element: div };
-        e.dataTransfer.effectAllowed = 'move';
-        setTimeout(() => div.classList.add('dragging'), 0);
-    });
-
-    div.addEventListener('dragend', () => {
-        div.classList.remove('dragging');
-        draggedItem = null;
-    });
+    div.addEventListener('click', () => selectSheet(sheet.id));
 
     return div;
 }
@@ -5587,8 +5832,13 @@ function createUngroupedFolder(type, count) {
         items = assets.filter(a => !a.layer_group);
     } else if (type === 'sheet') {
         items = sheets.filter(s => !s.layer_group);
-    } else {
+    } else if (type === 'link') {
         items = links.filter(l => !l.layer_group);
+    } else if (type === 'measurement') {
+        // For measurements, we need to get them from MeasurementTool
+        items = MeasurementTool ? MeasurementTool.getSavedMeasurements().filter(m => !m.layer_group) : [];
+    } else {
+        items = [];
     }
     
     items.forEach(item => {
@@ -5609,19 +5859,29 @@ function createUngroupedFolder(type, count) {
 
 /**
  * Create a group/folder item element with nested support
+ * @param {Object} group - The group object
+ * @param {string} type - The item type context (asset, link, sheet, measurement)
+ * @param {number} depth - Nesting depth
+ * @param {boolean} isGlobalCrossType - True if this is a global folder shown in a different type's section
  */
-function createGroupItem(group, type, depth = 0) {
+function createGroupItem(group, type, depth = 0, isGlobalCrossType = false) {
     const div = document.createElement('div');
     div.className = 'group-item folder-item';
+    if (isGlobalCrossType) {
+        div.classList.add('global-folder');
+    }
     div.dataset.groupId = group.id;
     div.dataset.groupType = type;
+    div.dataset.originalType = group.group_type; // Store the original type
     div.style.marginLeft = (depth * 12) + 'px';
 
     // Make the group a drop target for items
+    // Global groups accept any type, local groups only accept their own type
     div.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (draggedItem && draggedItem.type === type) {
+        const canAccept = group.scope === 'global' || (draggedItem && draggedItem.type === type);
+        if (draggedItem && canAccept) {
             div.classList.add('drop-target-active');
         }
     });
@@ -5634,7 +5894,8 @@ function createGroupItem(group, type, depth = 0) {
         e.preventDefault();
         e.stopPropagation();
         div.classList.remove('drop-target-active');
-        if (draggedItem && draggedItem.type === type) {
+        const canAccept = group.scope === 'global' || (draggedItem && draggedItem.type === type);
+        if (draggedItem && canAccept) {
             await moveItemToGroup(group.id, draggedItem.type, draggedItem.id);
             draggedItem = null;
         }
@@ -5643,6 +5904,7 @@ function createGroupItem(group, type, depth = 0) {
     // Toggle button for expand/collapse
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'folder-toggle';
+    // For global cross-type folders, we only show items of the current context type
     const hasChildren = (group.child_groups && group.child_groups.length > 0) || group.item_count > 0;
     toggleBtn.textContent = hasChildren ? '▼' : '•';
     toggleBtn.title = hasChildren ? 'Toggle folder' : '';
@@ -5665,16 +5927,17 @@ function createGroupItem(group, type, depth = 0) {
     checkbox.addEventListener('click', (e) => e.stopPropagation());
     checkbox.addEventListener('change', () => toggleLayerGroupVisibility(group.id, checkbox.checked));
 
-    // Folder icon
+    // Folder icon - use globe for global folders
     const folderIcon = document.createElement('span');
     folderIcon.className = 'folder-icon';
-    folderIcon.textContent = '📁';
+    folderIcon.textContent = group.scope === 'global' ? '🌐' : '📁';
+    folderIcon.title = group.scope === 'global' ? 'Global folder (accepts all item types)' : 'Local folder';
 
-    // Group name
+    // Group name with type indicator for global folders shown in other sections
     const nameSpan = document.createElement('span');
     nameSpan.className = 'group-name';
     nameSpan.textContent = group.name;
-    nameSpan.title = group.name;
+    nameSpan.title = group.name + (isGlobalCrossType ? ` (${group.group_type} folder)` : '');
 
     // Item count badge
     const countBadge = document.createElement('span');
@@ -5727,6 +5990,10 @@ function createGroupItem(group, type, depth = 0) {
         groupItems = assets.filter(a => a.layer_group === group.id);
     } else if (type === 'sheet') {
         groupItems = sheets.filter(s => s.layer_group === group.id);
+    } else if (type === 'measurement') {
+        // Get measurements from MeasurementTool
+        const savedMeasurements = MeasurementTool ? MeasurementTool.getSavedMeasurements() : [];
+        groupItems = savedMeasurements.filter(m => m.layer_group === group.id);
     } else {
         groupItems = links.filter(l => l.layer_group === group.id);
     }
@@ -5746,59 +6013,27 @@ function createGroupItem(group, type, depth = 0) {
 /**
  * Create an item element inside a folder
  */
+/**
+ * Create a folder item element using the unified ToolSectionItem module
+ * This provides consistent UI across all item types (sheets, assets, links, measurements)
+ */
 function createFolderItemElement(item, type) {
+    // Use the unified ToolSectionItem module if available
+    if (typeof ToolSectionItem !== 'undefined') {
+        return ToolSectionItem.create(item, type);
+    }
+    
+    // Fallback to basic implementation
     const div = document.createElement('div');
     div.className = 'folder-item-entry';
     div.dataset.itemId = item.id;
     div.dataset.itemType = type;
-
-    // Make draggable
-    div.draggable = true;
-    div.addEventListener('dragstart', (e) => {
-        draggedItem = { type: type, id: item.id };
-        div.classList.add('dragging');
-        e.stopPropagation();
-    });
-    div.addEventListener('dragend', (e) => {
-        div.classList.remove('dragging');
-        draggedItem = null;
-    });
-
-    // Item indicator
-    const indicator = document.createElement('span');
-    indicator.className = 'item-indicator';
-    if (type === 'asset') {
-        indicator.textContent = '📍';
-        indicator.style.color = '#e74c3c';
-    } else {
-        indicator.style.cssText = `
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 2px;
-            background-color: ${item.color || '#0066FF'};
-            margin-right: 6px;
-        `;
-    }
-
-    // Item name
+    
     const nameSpan = document.createElement('span');
     nameSpan.className = 'item-name';
-    nameSpan.textContent = type === 'asset' ? (item.asset_id || item.name) : (item.name || item.link_id);
-    nameSpan.title = nameSpan.textContent;
-
-    // Click to select
-    div.addEventListener('click', () => {
-        if (type === 'asset') {
-            selectAsset(item.id);
-        } else {
-            selectLink(item.id);
-        }
-    });
-
-    div.appendChild(indicator);
+    nameSpan.textContent = item.name || item.asset_id || item.link_id || 'Unnamed';
     div.appendChild(nameSpan);
-
+    
     return div;
 }
 
@@ -6398,27 +6633,8 @@ function renderMeasurementSetsUI() {
  * Toggle visibility of a measurement set
  */
 async function toggleMeasurementSetVisibility(msId, visible) {
-    try {
-        const resp = await fetch(`/api/measurement-sets/${msId}/toggle-visibility/`, {
-            method: 'PATCH',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCSRFToken()
-            },
-            body: JSON.stringify({ visible })
-        });
-
-        if (resp.ok) {
-            // Update local state
-            const ms = measurementSets.find(m => m.id === msId);
-            if (ms) ms.visible = visible;
-
-            // Re-render measurement overlays
-            renderSavedMeasurementsOnCanvas();
-        }
-    } catch (err) {
-        console.error('Error toggling measurement visibility:', err);
-    }
+    // Now uses MeasurementTool.toggleVisibility()
+    return await MeasurementTool.toggleVisibility(msId, visible);
 }
 
 /**
@@ -6542,7 +6758,7 @@ function renderSavedMeasurementsOnCanvas() {
                     }
                 );
                 canvas.add(line);
-                line.sendToBack();
+                // Don't send to back - keep measurements visible on top
             }
         }
 
@@ -6566,91 +6782,87 @@ function renderSavedMeasurementsOnCanvas() {
         });
     });
 
+    // Ensure saved measurements are on top
+    bringMeasurementsToFront();
     canvas.renderAll();
 }
 
 /**
  * Save current measurement as a measurement set
  */
-async function saveCurrentMeasurement() {
-    if (measurePoints.length === 0) {
-        alert('No measurement points to save');
-        return;
-    }
+/**
+ * Prompt user for measurement name and save
+ */
+function saveMeasurementPrompt() {
+    // Show modal instead of prompt
+    showSaveMeasurementModal();
+}
 
-    const name = prompt('Enter a name for this measurement set:');
-    if (!name || !name.trim()) return;
+function showSaveMeasurementModal() {
+    const modal = document.getElementById('saveMeasurementModal');
+    const folderSelect = document.getElementById('measurement-folder');
+    const nameInput = document.getElementById('measurement-name');
+    
+    if (!modal) return;
+    
+    // Clear and populate folder options
+    folderSelect.innerHTML = '<option value="">Ungrouped</option>';
+    
+    // Add measurement groups if they exist
+    const measurementGroups = PROJECT_DATA.measurementGroups || [];
+    measurementGroups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        folderSelect.appendChild(opt);
+    });
+    
+    nameInput.value = '';
+    modal.style.display = 'flex';
+    nameInput.focus();
+}
 
-    // Calculate total distance
-    let totalPixels = 0;
-    for (let i = 1; i < measurePoints.length; i++) {
-        const dx = measurePoints[i].x - measurePoints[i - 1].x;
-        const dy = measurePoints[i].y - measurePoints[i - 1].y;
-        totalPixels += Math.sqrt(dx * dx + dy * dy);
-    }
+function hideSaveMeasurementModal() {
+    const modal = document.getElementById('saveMeasurementModal');
+    if (modal) modal.style.display = 'none';
+}
 
-    // Convert to meters if calibrated
-    let totalMeters = null;
-    if (PROJECT_DATA.pixels_per_meter) {
-        totalMeters = totalPixels / PROJECT_DATA.pixels_per_meter;
-    }
-
-    const data = {
-        name: name.trim(),
-        measurement_type: measureMode,
-        points: measurePoints,
-        color: '#00bcd4',
-        total_distance_pixels: totalPixels,
-        total_distance_meters: totalMeters
-    };
-
-    try {
-        const resp = await fetch(`/api/projects/${PROJECT_ID}/measurement-sets/`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCSRFToken()
-            },
-            body: JSON.stringify(data)
+// Handle save measurement form submission
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('saveMeasurementForm');
+    if (form) {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const name = document.getElementById('measurement-name').value.trim();
+            const folderId = document.getElementById('measurement-folder').value;
+            
+            if (!name) {
+                console.error('Measurement name is required');
+                return;
+            }
+            
+            console.log('Saving measurement:', { name, folderId });
+            const success = await MeasurementTool.saveCurrent(name, folderId || null);
+            
+            if (success) {
+                hideSaveMeasurementModal();
+                await renderMeasurementGroupList();
+            }
         });
-
-        if (resp.ok) {
-            // Clear current measurement
-            clearMeasurement();
-            // Reload measurement sets
-            await loadMeasurementSets();
-            alert('Measurement saved!');
-        } else {
-            const errData = await resp.json();
-            alert(errData.error || 'Failed to save measurement');
-        }
-    } catch (err) {
-        console.error('Error saving measurement:', err);
-        alert('Error saving measurement');
     }
+});
+
+async function saveCurrentMeasurement() {
+    // Legacy wrapper - now uses MeasurementTool
+    return saveMeasurementPrompt();
 }
 
 /**
  * Delete a measurement set
  */
 async function deleteMeasurementSet(msId, name) {
-    if (!confirm(`Delete measurement "${name}"?`)) return;
-
-    try {
-        const resp = await fetch(`/api/measurement-sets/${msId}/`, {
-            method: 'DELETE',
-            headers: {
-                'X-CSRFToken': getCSRFToken()
-            }
-        });
-
-        if (resp.ok) {
-            await loadMeasurementSets();
-            renderSavedMeasurementsOnCanvas();
-        }
-    } catch (err) {
-        console.error('Error deleting measurement set:', err);
-    }
+    // Now uses MeasurementTool.delete()
+    return await MeasurementTool.delete(msId, name);
 }
 
 /**
