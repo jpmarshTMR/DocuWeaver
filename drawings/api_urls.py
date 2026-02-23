@@ -48,6 +48,7 @@ urlpatterns = [
     path('layer-groups/<int:pk>/move-item/', api_views.move_item_to_group, name='move-item-to-group'),
     path('layer-groups/<int:pk>/assign-ungrouped/', api_views.assign_ungrouped_to_group, name='assign-ungrouped-to-group'),
     path('layer-groups/<int:pk>/ungroup-all/', api_views.ungroup_all_items, name='ungroup-all-items'),
+    path('layer-groups/<int:pk>/move-contents/', api_views.move_contents_to_folder, name='move-contents-to-folder'),
 
     # Measurement Sets
     path('projects/<int:project_pk>/measurement-sets/', api_views.MeasurementSetListCreate.as_view(), name='measurement-set-list'),

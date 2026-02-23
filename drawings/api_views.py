@@ -780,6 +780,55 @@ def ungroup_all_items(request, pk):
     return Response({'status': 'ungrouped', 'count': count})
 
 
+@api_view(['POST'])
+def move_contents_to_folder(request, pk):
+    """Move all items from one folder to another folder (or to ungrouped).
+    
+    If item_type is specified, only moves items of that type (respects the view context).
+    If item_type is not specified AND source is a global folder, moves all types (Unified view).
+    """
+    source_group = get_object_or_404(LayerGroup, pk=pk)
+    target_group_id = request.data.get('target_group')  # None means ungrouped
+    item_type = request.data.get('item_type')  # asset, link, sheet, measurement, or None for all
+    
+    # Get target group if specified
+    target_group = None
+    if target_group_id:
+        target_group = get_object_or_404(LayerGroup, pk=target_group_id)
+        # Verify target is in same project
+        if target_group.project_id != source_group.project_id:
+            return Response({'error': 'Target folder must be in the same project'}, status=400)
+    
+    # Move items based on type
+    # IMPORTANT: Always respect item_type if provided, even for global folders
+    # This ensures the UI context (which tab the user is on) is honored
+    count = 0
+    
+    if item_type == 'asset':
+        count = Asset.objects.filter(layer_group=source_group).update(layer_group=target_group)
+    elif item_type == 'sheet':
+        count = Sheet.objects.filter(layer_group=source_group).update(layer_group=target_group)
+    elif item_type == 'measurement':
+        count = MeasurementSet.objects.filter(layer_group=source_group).update(layer_group=target_group)
+    elif item_type == 'link':
+        count = Link.objects.filter(layer_group=source_group).update(layer_group=target_group)
+    elif item_type is None or item_type == 'all':
+        # Only move all types if explicitly requested (Unified view) or no type specified
+        count += Asset.objects.filter(layer_group=source_group).update(layer_group=target_group)
+        count += Link.objects.filter(layer_group=source_group).update(layer_group=target_group)
+        count += Sheet.objects.filter(layer_group=source_group).update(layer_group=target_group)
+        count += MeasurementSet.objects.filter(layer_group=source_group).update(layer_group=target_group)
+    else:
+        return Response({'error': 'Invalid item_type'}, status=400)
+
+    return Response({
+        'status': 'moved',
+        'moved_count': count,
+        'source_group': source_group.id,
+        'target_group': target_group.id if target_group else None
+    })
+
+
 # ============================================================================
 # Measurement Set Views
 # ============================================================================

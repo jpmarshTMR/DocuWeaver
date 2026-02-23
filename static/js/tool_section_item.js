@@ -1,4 +1,4 @@
-*
+/**
  * Unified Tool Section Item Renderer
  * 
  * A reusable module for rendering items across all tool sections:

@@ -1657,14 +1657,14 @@
 </div>
 
 <!-- Measurement Config Modal -->
-<div id="measurementConfigModal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
-        <h2 style="margin-bottom: 1rem;">⚙️ Measurement Settings</h2>
+<div id="measurementConfigModal" class="modal measurement-config-modal">
+    <div class="modal-content" style="max-width: 420px; padding: 1.25rem;">
+        <h2 style="margin-bottom: 0.75rem; font-size: 1.1rem;">⚙️ Measurement Settings</h2>
         
         <!-- Tabs -->
-        <div style="display: flex; border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;">
+        <div style="display: flex; border-bottom: 1px solid var(--border-color); margin-bottom: 0.75rem;">
             <button type="button" class="config-tab active" data-tab="style" onclick="switchMeasureConfigTab('style')">
-                🎨 Line Style
+                🎨 Style
             </button>
             <button type="button" class="config-tab" data-tab="display" onclick="switchMeasureConfigTab('display')">
                 👁️ Display
@@ -1676,29 +1676,29 @@
         
         <!-- Style Tab -->
         <div id="config-tab-style" class="config-tab-content">
-            <div class="form-group">
+            <div class="form-group compact">
                 <label>Line Color</label>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <input type="color" id="config-line-color" value="#00bcd4" style="width: 50px; height: 30px; border: none; cursor: pointer;">
-                    <input type="text" id="config-line-color-hex" value="#00bcd4" style="flex: 1; padding: 0.4rem;" 
+                    <input type="color" id="config-line-color" value="#00bcd4" style="width: 40px; height: 26px; border: none; cursor: pointer;">
+                    <input type="text" id="config-line-color-hex" value="#00bcd4" style="flex: 1; padding: 0.3rem;" 
                            onchange="document.getElementById('config-line-color').value = this.value;">
                 </div>
             </div>
-            <div class="form-group">
+            <div class="form-group compact">
                 <label>Line Style</label>
-                <select id="config-line-style" style="width: 100%; padding: 0.4rem;">
+                <select id="config-line-style" style="width: 100%; padding: 0.3rem;">
                     <option value="dashed">Dashed ----</option>
                     <option value="solid">Solid ────</option>
                     <option value="dotted">Dotted ····</option>
                     <option value="dashdot">Dash-Dot -·-·</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>Line Thickness: <span id="config-thickness-value">1.5</span>px</label>
+            <div class="form-group compact">
+                <label>Thickness: <span id="config-thickness-value">1.5</span>px</label>
                 <input type="range" id="config-line-thickness" min="0.5" max="5" step="0.5" value="1.5" 
                        style="width: 100%;" oninput="document.getElementById('config-thickness-value').textContent = this.value;">
             </div>
-            <div class="form-group">
+            <div class="form-group compact">
                 <label>Marker Size: <span id="config-marker-value">4</span>px</label>
                 <input type="range" id="config-marker-size" min="2" max="10" step="1" value="4" 
                        style="width: 100%;" oninput="document.getElementById('config-marker-value').textContent = this.value;">
@@ -1707,61 +1707,76 @@
         
         <!-- Display Tab -->
         <div id="config-tab-display" class="config-tab-content" style="display: none;">
-            <div class="form-group">
+            <div class="form-group compact">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                     <input type="checkbox" id="config-show-distance" checked>
                     Show Distance
                 </label>
             </div>
-            <div class="form-group">
+            <div class="form-group compact">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                     <input type="checkbox" id="config-show-angle" checked>
                     Show Angle
                 </label>
             </div>
-            <div class="form-group">
-                <label>Label Scale (for monitor size): <span id="config-scale-value">1.0</span>x</label>
+            <div class="form-group compact">
+                <label>Label Scale: <span id="config-scale-value">1.0</span>x</label>
                 <input type="range" id="config-label-scale" min="0.5" max="3" step="0.1" value="1.0" 
                        style="width: 100%;" oninput="document.getElementById('config-scale-value').textContent = this.value;">
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                    Increase for larger monitors, decrease for smaller screens
+                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.2rem;">
+                    Adjust for your monitor size
                 </div>
             </div>
         </div>
         
         <!-- Presets Tab -->
         <div id="config-tab-presets" class="config-tab-content" style="display: none;">
-            <div class="form-group">
+            <div class="form-group compact">
                 <label>Saved Presets</label>
-                <div id="config-presets-list" style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; margin-bottom: 0.5rem;">
+                <div id="config-presets-list" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; margin-bottom: 0.5rem;">
                     <!-- Preset items rendered by JS -->
                 </div>
             </div>
-            <div class="form-group">
-                <label>Save Current Settings as New Preset</label>
+            <div class="form-group compact">
+                <label>Save as New Preset</label>
                 <div style="display: flex; gap: 0.5rem;">
-                    <input type="text" id="config-new-preset-name" placeholder="Preset name..." style="flex: 1; padding: 0.4rem;">
-                    <button type="button" class="btn btn-success" onclick="addNewConfigType()">Save</button>
+                    <input type="text" id="config-new-preset-name" placeholder="Preset name..." style="flex: 1; padding: 0.3rem;">
+                    <button type="button" class="btn btn-success" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="addNewConfigType()">Save</button>
                 </div>
             </div>
         </div>
         
-        <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
-            <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideMeasurementConfigModal()">Cancel</button>
-            <button type="button" class="btn btn-success btn-save" onclick="saveMeasurementConfig()">Save Settings</button>
+        <div style="display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
+            <button type="button" class="btn" style="background: var(--btn-secondary); padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="hideMeasurementConfigModal()">Cancel</button>
+            <button type="button" class="btn btn-success btn-save" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="saveMeasurementConfig()">Save</button>
         </div>
     </div>
 </div>
 
 <style>
+    /* Measurement config modal - lighter overlay */
+    .measurement-config-modal {
+        background: rgba(0, 0, 0, 0.3) !important;
+    }
+    .measurement-config-modal .modal-content {
+        margin-top: 80px;
+    }
+    .form-group.compact {
+        margin-bottom: 0.6rem;
+    }
+    .form-group.compact label {
+        font-size: 0.8rem;
+        margin-bottom: 0.25rem;
+    }
+    
     /* Measurement config modal tabs */
     .config-tab {
-        padding: 0.5rem 1rem;
+        padding: 0.4rem 0.75rem;
         background: none;
         border: none;
         cursor: pointer;
         color: var(--text-muted);
-        font-size: 0.85rem;
+        font-size: 0.8rem;
         border-bottom: 2px solid transparent;
         transition: all 0.2s;
     }

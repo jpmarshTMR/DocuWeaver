@@ -999,7 +999,21 @@ async function loadProjectData() {
         PROJECT_DATA.measurementGroups = measurementGroups;
 
         // Initialize OSM layer settings from project data
-        osmEnabled = PROJECT_DATA.osm_enabled || false;
+        // Check localStorage first for user preference, then fall back to project default
+        let osmUserPref = null;
+        try {
+            osmUserPref = localStorage.getItem('docuweaver-osm-enabled');
+        } catch (e) {
+            console.warn('Could not read OSM preference from localStorage:', e);
+        }
+        
+        if (osmUserPref !== null) {
+            // Use user's saved preference
+            osmEnabled = osmUserPref === 'true';
+        } else {
+            // Fall back to project default
+            osmEnabled = PROJECT_DATA.osm_enabled || false;
+        }
         osmOpacity = PROJECT_DATA.osm_opacity || 0.7;
         osmZIndex = PROJECT_DATA.osm_z_index || 0;
         
@@ -1887,6 +1901,14 @@ function debouncedRefreshOSM() {
  */
 function toggleOSMLayer() {
     osmEnabled = !osmEnabled;
+    
+    // Save OSM preference to localStorage for persistence
+    try {
+        localStorage.setItem('docuweaver-osm-enabled', osmEnabled ? 'true' : 'false');
+    } catch (e) {
+        console.warn('Could not save OSM preference to localStorage:', e);
+    }
+    
     if (osmEnabled) {
         renderOSMLayer();
     } else {
@@ -3086,9 +3108,12 @@ function clearMeasurements() {
 }
 
 function toggleMeasureMode(mode) {
+    // Clear existing measurement FIRST before switching modes
+    clearMeasurements();
+    MeasurementTool.clearCurrent();
+    
     measureMode = mode;
     MeasurementTool.startMeasurement(mode);
-    clearMeasurements();
 }
 
 function toggleMeasurePanel() {
@@ -5644,6 +5669,24 @@ function getAllGlobalGroups() {
 }
 
 /**
+ * Flatten a hierarchical group structure into a flat array
+ * Includes all nested child_groups at any depth
+ * @param {Array} groups - Array of root-level groups with child_groups
+ * @param {number} depth - Current nesting depth (for display indentation)
+ * @returns {Array} Flat array of {group, depth} objects
+ */
+function flattenGroupHierarchy(groups, depth = 0) {
+    const result = [];
+    groups.forEach(group => {
+        result.push({ group, depth });
+        if (group.child_groups && group.child_groups.length > 0) {
+            result.push(...flattenGroupHierarchy(group.child_groups, depth + 1));
+        }
+    });
+    return result;
+}
+
+/**
  * Get item count for a group based on the current type context
  * This calculates the count client-side for accurate display
  * @param {object} group - The group object
@@ -6573,9 +6616,15 @@ function showFolderSettingsMenu(group, type, anchorEl) {
         },
         { separator: true },
         {
-            label: 'Move to another folder',
+            label: 'Move folder to...',
             icon: '↗️',
             action: () => showMoveGroupDialog(group, type)
+        },
+        {
+            label: 'Move contents to...',
+            icon: '📦',
+            disabled: contextItemCount === 0,
+            action: () => showMoveContentsDialog(group, type)
         },
         {
             label: 'Ungroup all items',
@@ -6781,7 +6830,7 @@ async function createSubfolder(parentId, type) {
  * Show dialog to move a group to another parent
  */
 function showMoveGroupDialog(group, type) {
-    // Get type-specific groups
+    // Get type-specific groups (flattened to include all nested levels)
     let typeGroups;
     if (type === 'asset') {
         typeGroups = assetGroups;
@@ -6795,38 +6844,68 @@ function showMoveGroupDialog(group, type) {
         typeGroups = [];
     }
     
-    // Get all Global folders (any type) that could accept this folder
-    const globalFolders = getAllGlobalGroups().filter(g => 
-        g.id !== group.id && 
-        g.id !== group.parent_group &&
-        !isDescendantOf(g, group) // Don't allow moving to own descendants
-    );
+    // Flatten the hierarchy to get ALL folders at every level
+    const flatTypeGroups = flattenGroupHierarchy(typeGroups);
     
-    // Combine type-specific folders + global folders, removing duplicates
-    const allFolders = [...typeGroups];
-    globalFolders.forEach(gf => {
-        if (!allFolders.some(f => f.id === gf.id)) {
-            allFolders.push(gf);
+    // Also flatten global folders from all types
+    const allRootGroups = [...assetGroups, ...linkGroups, ...sheetGroups, ...measurementGroups];
+    const globalRootGroups = allRootGroups.filter(g => g.scope === 'global');
+    const flatGlobalGroups = flattenGroupHierarchy(globalRootGroups);
+    
+    // Combine all flattened groups, removing duplicates
+    const seen = new Set();
+    const allFlattened = [];
+    
+    // Add type-specific groups first
+    flatTypeGroups.forEach(item => {
+        if (!seen.has(item.group.id)) {
+            seen.add(item.group.id);
+            allFlattened.push(item);
         }
     });
     
-    // Filter out the current group and its current parent
-    const availableParents = allFolders.filter(g => 
-        g.id !== group.id && 
-        g.id !== group.parent_group &&
-        !isDescendantOf(g, group)
+    // Add global groups
+    flatGlobalGroups.forEach(item => {
+        if (!seen.has(item.group.id)) {
+            seen.add(item.group.id);
+            allFlattened.push(item);
+        }
+    });
+    
+    // Filter out invalid targets:
+    // - The group itself
+    // - The group's current parent (no-op move)
+    // - Any descendants of the group (would create circular reference)
+    const availableParents = allFlattened.filter(item => 
+        item.group.id !== group.id && 
+        item.group.id !== group.parent_group &&
+        !isDescendantOf(item.group, group)
     );
 
-    if (availableParents.length === 0) {
-        alert('No other folders available to move to.');
+    // Check if there are any options (folders or root level)
+    // Root level is always an option if the folder has a parent (not already at root)
+    const canMoveToRoot = group.parent_group !== null;
+    
+    if (availableParents.length === 0 && !canMoveToRoot) {
+        alert('No other folders available to move to. This folder is already at root level with no other folders.');
         return;
     }
 
-    // Build options list with indicators for global folders
-    const options = ['(Root level - no parent)', ...availableParents.map(g => {
-        const prefix = g.scope === 'global' ? '🌐 ' : '📁 ';
-        return prefix + g.name;
-    })];
+    // Build options list with hierarchy indicators
+    const options = [];
+    
+    // Add root level option if the folder has a parent
+    if (canMoveToRoot) {
+        options.push('(Root level - no parent)');
+    }
+    
+    // Add available parent folders
+    availableParents.forEach(item => {
+        const indent = '  '.repeat(item.depth);
+        const prefix = item.group.scope === 'global' ? '🌐 ' : '📁 ';
+        options.push(indent + prefix + item.group.name);
+    });
+    
     const choice = prompt(`Move "${group.name}" to:\n\n${options.map((o, i) => `${i}: ${o}`).join('\n')}\n\nEnter number:`);
     
     if (choice === null) return;
@@ -6836,7 +6915,16 @@ function showMoveGroupDialog(group, type) {
         return;
     }
 
-    const newParentId = idx === 0 ? null : availableParents[idx - 1].id;
+    // Determine the new parent ID based on selection
+    let newParentId;
+    if (canMoveToRoot && idx === 0) {
+        newParentId = null; // Move to root
+    } else {
+        // Adjust index if root option was shown
+        const folderIdx = canMoveToRoot ? idx - 1 : idx;
+        newParentId = availableParents[folderIdx].group.id;
+    }
+    
     moveGroupToParent(group.id, newParentId);
 }
 
@@ -6859,6 +6947,127 @@ async function moveGroupToParent(groupId, newParentId) {
         }
     } catch (err) {
         console.error('Error moving group:', err);
+    }
+}
+
+/**
+ * Show dialog to move a folder's CONTENTS (items) to another folder
+ * Unlike moving the folder itself, this allows moving items into subfolders
+ */
+function showMoveContentsDialog(group, type) {
+    // Get ALL folders including this folder's subfolders (valid targets for contents)
+    let typeGroups;
+    if (type === 'asset') {
+        typeGroups = assetGroups;
+    } else if (type === 'link') {
+        typeGroups = linkGroups;
+    } else if (type === 'sheet') {
+        typeGroups = sheetGroups;
+    } else if (type === 'measurement') {
+        typeGroups = measurementGroups;
+    } else {
+        typeGroups = [];
+    }
+    
+    // Flatten the hierarchy to get ALL folders at every level
+    const flatTypeGroups = flattenGroupHierarchy(typeGroups);
+    
+    // Also include global folders from all types
+    const allRootGroups = [...assetGroups, ...linkGroups, ...sheetGroups, ...measurementGroups];
+    const globalRootGroups = allRootGroups.filter(g => g.scope === 'global');
+    const flatGlobalGroups = flattenGroupHierarchy(globalRootGroups);
+    
+    // Combine all flattened groups, removing duplicates
+    const seen = new Set();
+    const allFlattened = [];
+    
+    flatTypeGroups.forEach(item => {
+        if (!seen.has(item.group.id)) {
+            seen.add(item.group.id);
+            allFlattened.push(item);
+        }
+    });
+    
+    flatGlobalGroups.forEach(item => {
+        if (!seen.has(item.group.id)) {
+            seen.add(item.group.id);
+            allFlattened.push(item);
+        }
+    });
+    
+    // Filter: exclude only the source folder itself (can't move contents to same folder)
+    // ALLOW subfolders - that's the whole point of this function!
+    const availableTargets = allFlattened.filter(item => 
+        item.group.id !== group.id
+    );
+
+    if (availableTargets.length === 0) {
+        alert('No other folders available to move contents to.');
+        return;
+    }
+
+    // Build options list - include "(Ungrouped)" as first option
+    const options = ['(Ungrouped - remove from folder)', ...availableTargets.map(item => {
+        const indent = '  '.repeat(item.depth);
+        const prefix = item.group.scope === 'global' ? '🌐 ' : '📁 ';
+        // Mark subfolders of the source folder
+        const isSubfolder = isDescendantOf(item.group, group);
+        const marker = isSubfolder ? ' ⬇️' : '';
+        return indent + prefix + item.group.name + marker;
+    })];
+    
+    // Describe what will be moved based on context
+    const typeLabel = type === 'asset' ? 'assets' :
+                      type === 'sheet' ? 'sheets' :
+                      type === 'measurement' ? 'measurements' :
+                      type === 'link' ? 'links' : 'items';
+    
+    const choice = prompt(
+        `Move ${typeLabel} from "${group.name}" to:\n\n` +
+        `${options.map((o, i) => `${i}: ${o}`).join('\n')}\n\n` +
+        `(⬇️ = subfolder of this folder)\n\nEnter number:`
+    );
+    
+    if (choice === null) return;
+    const idx = parseInt(choice);
+    if (isNaN(idx) || idx < 0 || idx >= options.length) {
+        alert('Invalid selection');
+        return;
+    }
+
+    const targetGroupId = idx === 0 ? null : availableTargets[idx - 1].group.id;
+    moveContentsToFolder(group.id, targetGroupId, type);
+}
+
+/**
+ * Move all items from one folder to another (or to ungrouped)
+ */
+async function moveContentsToFolder(sourceGroupId, targetGroupId, type) {
+    try {
+        const resp = await fetch(`/api/layer-groups/${sourceGroupId}/move-contents/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ 
+                target_group: targetGroupId,
+                item_type: type
+            })
+        });
+
+        if (resp.ok) {
+            const result = await resp.json();
+            showToast(`Moved ${result.moved_count || 0} items`, 'success');
+            await loadLayerGroups();
+            await loadProjectData();
+        } else {
+            const data = await resp.json();
+            alert(data.error || 'Failed to move contents');
+        }
+    } catch (err) {
+        console.error('Error moving contents:', err);
+        alert('Error moving contents');
     }
 }
 

@@ -438,6 +438,13 @@
         state.osmEnabled = !state.osmEnabled;
         window.osmEnabled = state.osmEnabled;
         
+        // Save OSM preference to localStorage for persistence
+        try {
+            localStorage.setItem('docuweaver-osm-enabled', state.osmEnabled ? 'true' : 'false');
+        } catch (e) {
+            console.warn('Could not save OSM preference to localStorage:', e);
+        }
+        
         if (state.osmEnabled) {
             renderOSMLayer();
         } else {

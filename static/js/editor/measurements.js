@@ -72,12 +72,17 @@
     }
     
     function toggleMeasureMode(mode) {
+        // Clear existing measurement FIRST before switching modes
+        clearMeasurements();
+        if (typeof MeasurementTool !== 'undefined') {
+            MeasurementTool.clearCurrent();
+        }
+        
         state.measureMode = mode;
         window.measureMode = mode;
         if (typeof MeasurementTool !== 'undefined') {
             MeasurementTool.startMeasurement(mode);
         }
-        clearMeasurements();
     }
     
     function toggleMeasurePanel() {

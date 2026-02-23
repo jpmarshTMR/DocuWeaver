@@ -224,6 +224,20 @@ const MeasurementTool = (() => {
         console.log('MeasurementTool initialized');
     }
 
+    /**
+     * Get the effective scale factor for labels based on zoom level.
+     * Labels scale inversely with zoom so they remain readable at any zoom.
+     */
+    function getZoomScaleFactor() {
+        if (!canvas) return 1;
+        const zoom = canvas.getZoom ? canvas.getZoom() : (window.currentZoomLevel || 1);
+        // Inverse scale: at zoom 0.5, labels are 2x larger; at zoom 2, labels are 0.5x
+        // Clamp to reasonable bounds
+        const inverseZoom = 1 / Math.max(0.1, Math.min(zoom, 5));
+        // Apply a base multiplier (1.5x) for better readability, then clamp
+        return Math.max(0.75, Math.min(inverseZoom * 1.5, 6));
+    }
+
     // ==================== Measurement Tracking ====================
 
     function startMeasurement(mode) {
@@ -328,7 +342,10 @@ const MeasurementTool = (() => {
             currentOverlays.push(segLine);
 
             // Draw segment label with distance and angle
-            const scaledFontSize = Math.round(config.labelFontSize * config.labelScale);
+            const zoomScale = getZoomScaleFactor();
+            const scaledFontSize = Math.round(config.labelFontSize * config.labelScale * zoomScale);
+            const scaledMarkerRadius = Math.round(config.markerRadius * zoomScale);
+            const scaledStrokeWidth = Math.max(1, config.lineStrokeWidth * zoomScale * 0.5);
             const midX = (p1.x + p2.x) / 2;
             const midY = (p1.y + p2.y) / 2;
             const segLabel = new fabric.Text(formatMeasurementLabel(p1, p2), {
@@ -387,7 +404,8 @@ const MeasurementTool = (() => {
 
         // Update or create preview label with distance and angle
         const label = formatMeasurementLabel(lastPt, pointerPt);
-        const scaledPreviewFontSize = Math.round(config.previewLabelFontSize * config.labelScale);
+        const zoomScale = getZoomScaleFactor();
+        const scaledPreviewFontSize = Math.round(config.previewLabelFontSize * config.labelScale * zoomScale);
         const midX = (lastPt.x + pointerX) / 2;
         const midY = (lastPt.y + pointerY) / 2;
 
