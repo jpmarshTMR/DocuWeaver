@@ -7400,20 +7400,26 @@ function showMeasurementConfigModal() {
     document.getElementById('config-show-distance').checked = config.showDistance !== false;
     document.getElementById('config-show-angle').checked = config.showAngle !== false;
     document.getElementById('config-label-scale').value = config.labelScale || 1;
-    document.getElementById('label-scale-value').textContent = (config.labelScale || 1).toFixed(1);
+    document.getElementById('config-scale-value').textContent = (config.labelScale || 1).toFixed(1);
     
     // Populate line style settings
-    document.getElementById('config-line-type').value = config.lineStyle || 'solid';
-    document.getElementById('config-stroke-width').value = config.lineStrokeWidth || 2;
-    document.getElementById('stroke-width-value').textContent = config.lineStrokeWidth || 2;
+    document.getElementById('config-line-style').value = config.lineStyle || 'dashed';
+    document.getElementById('config-line-thickness').value = config.lineStrokeWidth || 1.5;
+    document.getElementById('config-thickness-value').textContent = config.lineStrokeWidth || 1.5;
     document.getElementById('config-line-color').value = config.lineColor || '#00bcd4';
-    document.getElementById('config-marker-color').value = config.markerColor || config.lineColor || '#00bcd4';
+    document.getElementById('config-line-color-hex').value = config.lineColor || '#00bcd4';
     
-    // Refresh config types list
+    // Populate marker settings
+    if (document.getElementById('config-marker-size')) {
+        document.getElementById('config-marker-size').value = config.markerSize || 4;
+        document.getElementById('config-marker-value').textContent = config.markerSize || 4;
+    }
+    
+    // Refresh presets list
     refreshConfigTypesList();
     
-    // Show first tab by default
-    switchConfigTab('display');
+    // Show style tab by default (matches HTML active state)
+    switchConfigTab('style');
     
     modal.style.display = 'flex';
 }
@@ -7425,26 +7431,37 @@ function hideMeasurementConfigModal() {
 
 function switchConfigTab(tabName) {
     // Update tab buttons
-    document.querySelectorAll('.config-tab-btn').forEach(btn => {
+    document.querySelectorAll('.config-tab').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
     
     // Update tab panels
-    document.querySelectorAll('.config-tab-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.id === `tab-${tabName}`);
+    document.querySelectorAll('.config-tab-content').forEach(panel => {
+        const isActive = panel.id === `config-tab-${tabName}`;
+        panel.style.display = isActive ? 'block' : 'none';
     });
 }
 
+// Alias for HTML compatibility
+function switchMeasureConfigTab(tabName) {
+    switchConfigTab(tabName);
+}
+
 function saveMeasurementConfig() {
+    const lineStyle = document.getElementById('config-line-style').value || 'dashed';
+    const lineThickness = parseFloat(document.getElementById('config-line-thickness').value) || 1.5;
+    const markerSize = parseInt(document.getElementById('config-marker-size').value) || 4;
+    
     const config = {
         showDistance: document.getElementById('config-show-distance').checked,
         showAngle: document.getElementById('config-show-angle').checked,
         labelScale: parseFloat(document.getElementById('config-label-scale').value) || 1,
-        lineStyle: document.getElementById('config-line-type').value || 'solid',
-        lineStrokeWidth: parseInt(document.getElementById('config-stroke-width').value) || 2,
-        lineColor: document.getElementById('config-line-color').value || '#FF0000',
-        markerColor: document.getElementById('config-marker-color').value || '#FF0000',
-        previewLineColor: document.getElementById('config-line-color').value || '#FF0000'
+        lineStyle: lineStyle,
+        lineStrokeWidth: lineThickness,
+        lineColor: document.getElementById('config-line-color').value || '#00bcd4',
+        markerColor: document.getElementById('config-line-color').value || '#00bcd4',
+        markerSize: markerSize,
+        previewLineColor: document.getElementById('config-line-color').value || '#00bcd4'
     };
     
     // Update dash array based on style
@@ -7457,7 +7474,7 @@ function saveMeasurementConfig() {
 }
 
 function refreshConfigTypesList() {
-    const container = document.getElementById('config-types-list');
+    const container = document.getElementById('config-presets-list');
     if (!container) return;
     
     const configTypes = MeasurementTool.getConfigTypes();
@@ -7515,12 +7532,16 @@ function applyConfigType(name) {
     document.getElementById('config-show-distance').checked = config.showDistance !== false;
     document.getElementById('config-show-angle').checked = config.showAngle !== false;
     document.getElementById('config-label-scale').value = config.labelScale || 1;
-    document.getElementById('label-scale-value').textContent = (config.labelScale || 1).toFixed(1);
-    document.getElementById('config-line-type').value = config.lineStyle || 'solid';
-    document.getElementById('config-stroke-width').value = config.lineStrokeWidth || 2;
-    document.getElementById('stroke-width-value').textContent = config.lineStrokeWidth || 2;
+    document.getElementById('config-scale-value').textContent = (config.labelScale || 1).toFixed(1);
+    document.getElementById('config-line-style').value = config.lineStyle || 'dashed';
+    document.getElementById('config-line-thickness').value = config.lineStrokeWidth || 1.5;
+    document.getElementById('config-thickness-value').textContent = config.lineStrokeWidth || 1.5;
     document.getElementById('config-line-color').value = config.lineColor || '#00bcd4';
-    document.getElementById('config-marker-color').value = config.markerColor || config.lineColor || '#00bcd4';
+    document.getElementById('config-line-color-hex').value = config.lineColor || '#00bcd4';
+    if (document.getElementById('config-marker-size')) {
+        document.getElementById('config-marker-size').value = config.markerSize || 4;
+        document.getElementById('config-marker-value').textContent = config.markerSize || 4;
+    }
     
     // Update the list to show active state
     refreshConfigTypesList();
@@ -7537,8 +7558,9 @@ function addNewConfigType() {
     const key = name.toLowerCase().replace(/\s+/g, '_');
     
     // Get current settings as the new type's settings
-    const lineStyle = document.getElementById('config-line-type').value || 'solid';
-    const lineStrokeWidth = parseInt(document.getElementById('config-stroke-width').value) || 2;
+    const lineStyle = document.getElementById('config-line-style').value || 'dashed';
+    const lineStrokeWidth = parseFloat(document.getElementById('config-line-thickness').value) || 1.5;
+    const markerSize = parseInt(document.getElementById('config-marker-size').value) || 4;
     
     const settings = {
         showDistance: document.getElementById('config-show-distance').checked,
@@ -7547,7 +7569,8 @@ function addNewConfigType() {
         lineStyle: lineStyle,
         lineStrokeWidth: lineStrokeWidth,
         lineColor: document.getElementById('config-line-color').value || '#00bcd4',
-        markerColor: document.getElementById('config-marker-color').value || '#00bcd4',
+        markerColor: document.getElementById('config-line-color').value || '#00bcd4',
+        markerSize: markerSize,
         previewLineColor: document.getElementById('config-line-color').value || '#00bcd4',
         lineDashArray: MeasurementTool.getLineDashArray(lineStyle, lineStrokeWidth)
     };
@@ -7595,8 +7618,9 @@ function saveAndUpdateConfigType() {
         const configTypes = MeasurementTool.getConfigTypes();
         const displayName = configTypes[key]?.name || key;
         
-        const lineStyle = document.getElementById('config-line-type').value || 'solid';
-        const lineStrokeWidth = parseInt(document.getElementById('config-stroke-width').value) || 2;
+        const lineStyle = document.getElementById('config-line-style').value || 'dashed';
+        const lineStrokeWidth = parseFloat(document.getElementById('config-line-thickness').value) || 1.5;
+        const markerSize = parseInt(document.getElementById('config-marker-size').value) || 4;
         
         const settings = {
             showDistance: document.getElementById('config-show-distance').checked,
@@ -7605,7 +7629,8 @@ function saveAndUpdateConfigType() {
             lineStyle: lineStyle,
             lineStrokeWidth: lineStrokeWidth,
             lineColor: document.getElementById('config-line-color').value || '#00bcd4',
-            markerColor: document.getElementById('config-marker-color').value || '#00bcd4',
+            markerColor: document.getElementById('config-line-color').value || '#00bcd4',
+            markerSize: markerSize,
             previewLineColor: document.getElementById('config-line-color').value || '#00bcd4',
             lineDashArray: MeasurementTool.getLineDashArray(lineStyle, lineStrokeWidth)
         };
@@ -7640,24 +7665,14 @@ function deleteConfigTypeHandler(key) {
 
 // Initialize config tab click handlers
 document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('.config-tab-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            switchConfigTab(this.dataset.tab);
-        });
-    });
+    // Tab button event listeners now handled via onclick attributes in HTML
     
-    // Slider value displays
-    const labelScaleSlider = document.getElementById('config-label-scale');
-    if (labelScaleSlider) {
-        labelScaleSlider.addEventListener('input', function() {
-            document.getElementById('label-scale-value').textContent = parseFloat(this.value).toFixed(1);
-        });
-    }
-    
-    const strokeWidthSlider = document.getElementById('config-stroke-width');
-    if (strokeWidthSlider) {
-        strokeWidthSlider.addEventListener('input', function() {
-            document.getElementById('stroke-width-value').textContent = this.value;
+    // Slider value displays - sync color input with hex text
+    const lineColorInput = document.getElementById('config-line-color');
+    const lineColorHex = document.getElementById('config-line-color-hex');
+    if (lineColorInput && lineColorHex) {
+        lineColorInput.addEventListener('input', function() {
+            lineColorHex.value = this.value;
         });
     }
 });

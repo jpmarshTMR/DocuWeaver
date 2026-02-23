@@ -44,6 +44,14 @@ htmlcov/
 
 # pytest
 .pytest_cache/
+
+# AI/Agent temporary documentation (clean up before merging)
+AI_*.md
+TEMP_*.md
+*_COMPLETE.md
+*_DOCS.md
+*_FIXES.md
+
 nul
 .github/chatmodes/Plan.chatmode.md
 media/icons/Screenshot_2026-02-09_194523.png

@@ -1888,6 +1888,18 @@
 </script>
 <script src="{% static 'js/tool_section_item.js' %}"></script>
 <script src="{% static 'js/measurement_tool.js' %}"></script>
+<!-- Modular canvas editor - load in dependency order -->
+<script src="{% static 'js/editor/namespace.js' %}"></script>
+<script src="{% static 'js/editor/viewport.js' %}"></script>
+<script src="{% static 'js/editor/tools.js' %}"></script>
+<script src="{% static 'js/editor/canvas_init.js' %}"></script>
+<script src="{% static 'js/editor/assets.js' %}"></script>
+<script src="{% static 'js/editor/links.js' %}"></script>
+<script src="{% static 'js/editor/sheets.js' %}"></script>
+<script src="{% static 'js/editor/osm.js' %}"></script>
+<script src="{% static 'js/editor/measurements.js' %}"></script>
+<script src="{% static 'js/editor/main.js' %}"></script>
+<!-- Legacy: Still loading original for functions not yet migrated -->
 <script src="{% static 'js/canvas_editor.js' %}"></script>
 <script>
     // Sync dark mode toggle icon and auto-invert PDFs
