@@ -1346,9 +1346,10 @@
 
         <div class="tool-section">
             <h4>Export</h4>
-            <button class="btn btn-success" style="width: 100%;" onclick="exportProject()">
-                📤 Export PDFs
-            </button>
+            <a href="{% url 'drawings:export_project_sqlite' project.pk %}" class="btn btn-success" style="width: 100%; display: block; text-align: center; text-decoration: none;">
+                � Export Project (.docuweaver)
+            </a>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0.5rem 0;">Includes PDFs and all data</p>
             <button class="btn" style="width: 100%; margin-top: 0.5rem;" onclick="downloadReport()">
                 📊 Adjustment Report
             </button>

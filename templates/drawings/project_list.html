@@ -36,7 +36,7 @@
                     <td>
                         <a href="{% url 'drawings:editor' project.pk %}" class="btn">Open Editor</a>
                         <a href="{% url 'drawings:project_detail' project.pk %}" class="btn" style="background: var(--btn-secondary);">Details</a>
-                        <a href="{% url 'drawings:export_project' project.pk %}" class="btn" style="background: #17a2b8;" title="Export project">📤</a>
+                        <a href="{% url 'drawings:export_project_sqlite' project.pk %}" class="btn" style="background: #17a2b8;" title="Export project">�</a>
                     </td>
                 </tr>
                 {% endfor %}
