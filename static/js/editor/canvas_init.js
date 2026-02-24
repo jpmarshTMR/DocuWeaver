@@ -52,6 +52,11 @@
         setupCanvasEvents();
         setupKeyboardShortcuts();
         
+        // Initialize MeasurementTool
+        if (typeof MeasurementTool !== 'undefined' && typeof PROJECT_ID !== 'undefined') {
+            MeasurementTool.init(state.canvas, PROJECT_ID);
+        }
+        
         // Handle window resize
         window.addEventListener('resize', function() {
             const rect = container.getBoundingClientRect();
@@ -221,11 +226,8 @@
         } else if (state.currentMode === 'split' && state.isSplitting) {
             DW.tools.handleSplitMove(opt);
         } else if (state.currentMode === 'measure') {
-            MeasurementTool.handleMouseMove(
-                canvas.getPointer(evt),
-                state.currentZoomLevel,
-                state.viewportRotation
-            );
+            const pointer = canvas.getPointer(evt);
+            MeasurementTool.handleMouseMove(pointer.x, pointer.y);
         }
     }
     

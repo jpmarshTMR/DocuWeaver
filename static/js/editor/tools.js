@@ -85,6 +85,11 @@
             state.calibrationPoints = [];
         }
         
+        // Start measurement tool when entering measure mode
+        if (mode === 'measure' && typeof MeasurementTool !== 'undefined') {
+            MeasurementTool.startMeasurement(state.measureMode || 'single');
+        }
+        
         // Update object selectability
         canvas.getObjects().forEach(obj => {
             if (obj.sheetData) {

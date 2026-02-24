@@ -279,6 +279,12 @@ const MeasurementTool = (() => {
     // ==================== Point Addition & Rendering ====================
 
     function addPoint(x, y) {
+        // Auto-start in single mode if not started
+        if (!currentMode) {
+            console.log('MeasurementTool: auto-starting in single mode');
+            startMeasurement('single');
+        }
+        
         // In single mode with 2 points, auto-clear FIRST before adding new point
         if (currentMode === 'single' && currentPoints.length >= 2) {
             console.log('Single mode: auto-clearing after 2 points');
@@ -375,6 +381,7 @@ const MeasurementTool = (() => {
     function handleMouseMove(pointerX, pointerY) {
         if (currentPoints.length === 0) return;
         if (currentMode === 'single' && currentPoints.length >= 2) return;
+        if (!canvas) return;
 
         const lastPt = currentPoints[currentPoints.length - 1];
         const pointerPt = { x: pointerX, y: pointerY };
@@ -397,10 +404,10 @@ const MeasurementTool = (() => {
                 }
             );
             canvas.add(previewLine);
+            canvas.bringToFront(previewLine);
         } else {
             previewLine.set({ x1: lastPt.x, y1: lastPt.y, x2: pointerX, y2: pointerY });
         }
-        canvas.bringToFront(previewLine);
 
         // Update or create preview label with distance and angle
         const label = formatMeasurementLabel(lastPt, pointerPt);
@@ -423,6 +430,7 @@ const MeasurementTool = (() => {
                 isMeasurement: true
             });
             canvas.add(previewLabel);
+            canvas.bringToFront(previewLabel);
         } else {
             previewLabel.set({ 
                 text: label, 
@@ -431,8 +439,9 @@ const MeasurementTool = (() => {
                 fontSize: scaledPreviewFontSize
             });
         }
-        canvas.bringToFront(previewLabel);
-        canvas.renderAll();
+        
+        // Use requestRenderAll for better performance (batches renders)
+        canvas.requestRenderAll();
     }
 
     function removePreview() {
