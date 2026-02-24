@@ -40,8 +40,18 @@
             renderSheetsOnCanvas();
             renderAssetsOnCanvas();
             renderLinksOnCanvas();
+            
+            // Render sidebar lists
             renderSheetLayers();
             renderAssetList();
+            if (typeof renderLinkList === 'function') {
+                renderLinkList();
+            }
+            
+            // Render layer groups UI (folders)
+            if (typeof renderLayerGroupsUI === 'function') {
+                renderLayerGroupsUI();
+            }
             
             // Load OSM if enabled
             if (state.osmEnabled && state.refAssetId) {
@@ -56,25 +66,8 @@
         }
     }
     
-    async function loadLayerGroups() {
-        try {
-            const resp = await fetch(`/api/projects/${PROJECT_ID}/layer-groups/`);
-            if (resp.ok) {
-                state.layerGroups = await resp.json();
-                window.layerGroups = state.layerGroups;
-                
-                // Initialize group visibility
-                state.layerGroups.forEach(g => {
-                    if (state.groupVisibility[g.id] === undefined) {
-                        state.groupVisibility[g.id] = true;
-                    }
-                });
-                window.groupVisibility = state.groupVisibility;
-            }
-        } catch (err) {
-            console.error('Error loading layer groups:', err);
-        }
-    }
+    // Note: loadLayerGroups is defined in layers.js and exported to window.loadLayerGroups
+    // It loads groups by type (asset, link, sheet, measurement) and calls renderLayerGroupsUI
     
     // ==================== Theme ====================
     
@@ -390,6 +383,23 @@
     async function initEditor() {
         console.log('Initializing DocuWeaver Editor...');
         
+        // Copy PROJECT_DATA calibration values into state
+        if (typeof PROJECT_DATA !== 'undefined') {
+            state.refAssetId = PROJECT_DATA.ref_asset_id || '';
+            state.refPixelX = PROJECT_DATA.ref_pixel_x || 0;
+            state.refPixelY = PROJECT_DATA.ref_pixel_y || 0;
+            state.assetRotationDeg = PROJECT_DATA.asset_rotation || 0;
+            state.osmEnabled = PROJECT_DATA.osm_enabled || false;
+            state.osmOpacity = PROJECT_DATA.osm_opacity || 0.7;
+            state.osmZIndex = PROJECT_DATA.osm_z_index || 0;
+            
+            // Sync to legacy globals
+            window.refAssetId = state.refAssetId;
+            window.refPixelX = state.refPixelX;
+            window.refPixelY = state.refPixelY;
+            window.assetRotationDeg = state.assetRotationDeg;
+        }
+        
         // Initialize canvas
         if (typeof DW.canvas !== 'undefined' && DW.canvas.init) {
             DW.canvas.init();
@@ -429,7 +439,6 @@
     
     DW.main = {
         loadProjectData,
-        loadLayerGroups,
         applyCanvasTheme,
         applyFiltersPreservingSize,
         applyPdfInversion,
@@ -446,7 +455,7 @@
     
     // Expose globally for backward compatibility
     window.loadProjectData = loadProjectData;
-    window.loadLayerGroups = loadLayerGroups;
+    // Note: loadLayerGroups is exported by layers.js
     window.applyCanvasTheme = applyCanvasTheme;
     window.applyFiltersPreservingSize = applyFiltersPreservingSize;
     window.applyPdfInversion = applyPdfInversion;
@@ -461,8 +470,8 @@
     
     // Auto-initialize on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', function() {
-        // Check if we should auto-init (look for canvas element)
-        if (document.getElementById('canvas')) {
+        // Check if we should auto-init (look for canvas container)
+        if (document.getElementById('canvas-container')) {
             initEditor();
         }
     });
