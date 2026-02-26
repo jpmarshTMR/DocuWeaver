@@ -56,3 +56,8 @@ nul
 .github/chatmodes/Plan.chatmode.md
 media/icons/*
 
+# Dev Notes
+dev_notes/*
+
+# migration
+migration/*
