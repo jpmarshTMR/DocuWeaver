@@ -270,16 +270,33 @@
         if (zoom > 5) zoom = 5;
         if (zoom < 0.1) zoom = 0.1;
         
-        // Zoom toward mouse position
-        const pointer = canvas.getPointer(evt, true);
+        // Get mouse position relative to canvas element (in screen/DOM pixels)
+        const rect = canvas.upperCanvasEl.getBoundingClientRect();
+        const screenPoint = {
+            x: evt.clientX - rect.left,
+            y: evt.clientY - rect.top
+        };
         
-        if (typeof setZoomPreservingRotation === 'function') {
+        console.log('Mouse wheel zoom:', {
+            screenPoint: screenPoint,
+            oldZoom: state.currentZoomLevel,
+            newZoom: zoom,
+            viewportRotation: state.viewportRotation
+        });
+        
+        if (typeof zoomToScreenPoint === 'function') {
+            zoomToScreenPoint(screenPoint, zoom);
+        } else if (typeof zoomToPoint === 'function') {
+            // Fallback to old method
+            const pointer = canvas.getPointer(evt);
+            zoomToPoint(pointer, zoom);
+        } else if (typeof setZoomPreservingRotation === 'function') {
             setZoomPreservingRotation(zoom);
+            if (typeof updateZoomDisplay === 'function') updateZoomDisplay();
         } else {
             state.currentZoomLevel = zoom;
         }
         
-        if (typeof updateZoomDisplay === 'function') updateZoomDisplay();
         if (typeof debouncedRefreshOSM === 'function') debouncedRefreshOSM();
         if (typeof debouncedSaveViewportState === 'function') debouncedSaveViewportState();
     }

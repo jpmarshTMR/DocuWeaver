@@ -18,18 +18,176 @@
     
     // ==================== Zoom Functions ====================
     
+    /**
+     * Zoom in toward the center of the canvas viewport
+     */
     function zoomIn() {
-        let zoom = state.currentZoomLevel * 1.2;
-        if (zoom > 5) zoom = 5;
-        setZoomPreservingRotation(zoom);
-        updateZoomDisplay();
+        const canvas = state.canvas;
+        const center = canvas.getVpCenter();
+        zoomToPoint(center, state.currentZoomLevel * 1.2);
     }
     
+    /**
+     * Zoom out from the center of the canvas viewport
+     */
     function zoomOut() {
-        let zoom = state.currentZoomLevel / 1.2;
+        const canvas = state.canvas;
+        const center = canvas.getVpCenter();
+        zoomToPoint(center, state.currentZoomLevel / 1.2);
+    }
+    
+    /**
+     * Zoom to a specific point on the canvas
+     * @param {Object} point - The point to zoom toward {x, y} in canvas coordinates
+     * @param {number} newZoom - The target zoom level
+     */
+    function zoomToPoint(point, newZoom) {
+        const canvas = state.canvas;
+        if (!canvas) return;
+        
+        // Clamp zoom level
+        let zoom = newZoom;
+        if (zoom > 5) zoom = 5;
         if (zoom < 0.1) zoom = 0.1;
-        setZoomPreservingRotation(zoom);
+        
+        console.log('zoomToPoint called:', { point, newZoom: zoom, currentZoom: state.currentZoomLevel, rotation: state.viewportRotation });
+        
+        // If no rotation, use Fabric's native method which is proven to work
+        if (state.viewportRotation === 0) {
+            const fabricPoint = new fabric.Point(point.x, point.y);
+            canvas.zoomToPoint(fabricPoint, zoom);
+            
+            // Update state
+            state.currentZoomLevel = zoom;
+            window.currentZoomLevel = zoom;
+            
+            updateZoomDisplay();
+            
+            if (typeof debouncedSaveViewportState === 'function') {
+                debouncedSaveViewportState();
+            }
+            return;
+        }
+        
+        // For rotated viewports, we need custom handling
+        const angleRad = state.viewportRotation * Math.PI / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+        
+        // Get the current viewport transform
+        const vpt = canvas.viewportTransform;
+        const oldZoom = state.currentZoomLevel;
+        
+        // The point in canvas space that we want to keep stationary
+        const canvasX = point.x;
+        const canvasY = point.y;
+        
+        // Transform this point to screen space with current transform
+        const screenX = canvasX * vpt[0] + canvasY * vpt[2] + vpt[4];
+        const screenY = canvasX * vpt[1] + canvasY * vpt[3] + vpt[5];
+        
+        console.log('Screen coords before zoom:', { screenX, screenY });
+        
+        // Now update the zoom in the transform matrix (keeping rotation)
+        vpt[0] = cos * zoom;
+        vpt[1] = sin * zoom;
+        vpt[2] = -sin * zoom;
+        vpt[3] = cos * zoom;
+        
+        // Calculate where that same canvas point would appear on screen with new zoom
+        // but without adjusting translation yet
+        const newScreenX = canvasX * vpt[0] + canvasY * vpt[2] + vpt[4];
+        const newScreenY = canvasX * vpt[1] + canvasY * vpt[3] + vpt[5];
+        
+        console.log('Screen coords after zoom (before translation fix):', { newScreenX, newScreenY });
+        
+        // Calculate the offset needed to keep the point at the same screen position
+        const offsetX = screenX - newScreenX;
+        const offsetY = screenY - newScreenY;
+        
+        console.log('Applying offset:', { offsetX, offsetY });
+        
+        // Apply the offset
+        vpt[4] += offsetX;
+        vpt[5] += offsetY;
+        
+        // Update state
+        state.currentZoomLevel = zoom;
+        window.currentZoomLevel = zoom;
+        
+        // Apply the transform
+        canvas.setViewportTransform(vpt);
+        canvas.requestRenderAll();
+        
         updateZoomDisplay();
+        
+        if (typeof debouncedSaveViewportState === 'function') {
+            debouncedSaveViewportState();
+        }
+    }
+    
+    /**
+     * Zoom to a specific point in screen/viewport coordinates
+     * @param {Object} screenPoint - The point to zoom toward {x, y} in screen pixels
+     * @param {number} newZoom - The target zoom level
+     */
+    function zoomToScreenPoint(screenPoint, newZoom) {
+        const canvas = state.canvas;
+        if (!canvas) return;
+        
+        // Clamp zoom level
+        let zoom = newZoom;
+        if (zoom > 5) zoom = 5;
+        if (zoom < 0.1) zoom = 0.1;
+        
+        // Get the current viewport transform (make a copy)
+        const vpt = canvas.viewportTransform.slice();
+        const oldZoom = state.currentZoomLevel;
+        
+        // The screen point that should remain stationary (in screen/DOM coordinates)
+        const screenX = screenPoint.x;
+        const screenY = screenPoint.y;
+        
+        // Calculate which canvas point is currently at this screen position
+        // Using inverse transform: canvas = inverse(vpt) * screen
+        // For a 2x3 matrix [a,b,c,d,e,f]: inverse multiplies by 1/det where det = ad-bc
+        const det = vpt[0] * vpt[3] - vpt[1] * vpt[2];
+        if (Math.abs(det) < 0.000001) return; // Avoid division by zero
+        
+        // Apply inverse transform to get canvas coordinates
+        const canvasX = (vpt[3] * (screenX - vpt[4]) - vpt[2] * (screenY - vpt[5])) / det;
+        const canvasY = (vpt[0] * (screenY - vpt[5]) - vpt[1] * (screenX - vpt[4])) / det;
+        
+        // Calculate zoom ratio
+        const zoomRatio = zoom / oldZoom;
+        
+        // Scale the rotation+zoom part of the matrix
+        vpt[0] *= zoomRatio;
+        vpt[1] *= zoomRatio;
+        vpt[2] *= zoomRatio;
+        vpt[3] *= zoomRatio;
+        
+        // Calculate where that canvas point would now appear in screen space
+        const newScreenX = canvasX * vpt[0] + canvasY * vpt[2] + vpt[4];
+        const newScreenY = canvasX * vpt[1] + canvasY * vpt[3] + vpt[5];
+        
+        // Adjust translation to keep the canvas point at the original screen position
+        vpt[4] += (screenX - newScreenX);
+        vpt[5] += (screenY - newScreenY);
+        
+        // Update state
+        state.currentZoomLevel = zoom;
+        window.currentZoomLevel = zoom;
+        
+        // Apply the transform
+        canvas.setViewportTransform(vpt);
+        canvas.requestRenderAll();
+        
+        updateZoomDisplay();
+        
+        if (typeof debouncedSaveViewportState === 'function') {
+            debouncedSaveViewportState();
+        }
     }
     
     /**
@@ -361,6 +519,8 @@
     DW.viewport = {
         zoomIn,
         zoomOut,
+        zoomToPoint,
+        zoomToScreenPoint,
         zoomFit,
         bringToScale,
         resetView,
@@ -382,6 +542,8 @@
     // Expose globally for backward compatibility
     window.zoomIn = zoomIn;
     window.zoomOut = zoomOut;
+    window.zoomToPoint = zoomToPoint;
+    window.zoomToScreenPoint = zoomToScreenPoint;
     window.zoomFit = zoomFit;
     window.bringToScale = bringToScale;
     window.resetView = resetView;

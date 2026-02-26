@@ -362,8 +362,20 @@
                 if (obj.isLinkObject) obj.visible = visible;
             });
         } else if (groupName === 'measurements') {
+            // Toggle all measurement objects (current and saved)
             canvas.getObjects().forEach(obj => {
-                if (obj.measurementData || obj.isMeasurement) obj.visible = visible;
+                if (obj.measurementData || obj.isMeasurement || obj.isSavedMeasurement || obj.isMeasurementGroup) {
+                    obj.visible = visible;
+                }
+            });
+            // Also update all checkboxes in the measurement list
+            document.querySelectorAll('#measurement-groups-list .ms-visibility').forEach(cb => {
+                if (cb.checked !== visible) {
+                    cb.checked = visible;
+                    // Trigger the change event to update the server
+                    const event = new Event('change', { bubbles: true });
+                    cb.dispatchEvent(event);
+                }
             });
         }
         canvas.renderAll();

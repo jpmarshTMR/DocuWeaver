@@ -693,8 +693,13 @@ const MeasurementTool = (() => {
             });
 
             if (response.ok) {
+                const result = await response.json();
+                // Update the local measurement set with the server response
                 const ms = savedMeasurements.find(m => m.id === id);
-                if (ms) ms.visible = visible;
+                if (ms) {
+                    ms.visible = result.visible;
+                }
+                // Re-render the canvas to show/hide the measurement
                 renderSaved();
                 return true;
             }

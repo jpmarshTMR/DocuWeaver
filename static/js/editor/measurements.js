@@ -342,7 +342,12 @@
     
     async function toggleMeasurementSetVisibility(msId, visible) {
         if (typeof MeasurementTool !== 'undefined') {
-            return await MeasurementTool.toggleVisibility(msId, visible);
+            const success = await MeasurementTool.toggleVisibility(msId, visible);
+            if (success) {
+                // Reload measurement sets to sync state
+                await loadMeasurementSets();
+            }
+            return success;
         }
     }
     
@@ -633,20 +638,20 @@
             preview.className = 'config-type-preview';
             const lineColor = cfg.lineColor || '#00bcd4';
             const lineStyle = cfg.lineStyle || 'dashed';
-            let bgStyle = `background-color: ${lineColor};`;
-            if (lineStyle === 'dashed') {
-                bgStyle = `background: repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 5px, transparent 5px, transparent 10px);`;
+            
+            // Set background based on line style
+            if (lineStyle === 'solid') {
+                preview.style.backgroundColor = lineColor;
+            } else if (lineStyle === 'dashed') {
+                preview.style.background = `repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 5px, transparent 5px, transparent 10px)`;
             } else if (lineStyle === 'dotted') {
-                bgStyle = `background: repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 2px, transparent 2px, transparent 5px);`;
+                preview.style.background = `repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 2px, transparent 2px, transparent 5px)`;
+            } else if (lineStyle === 'dashdot') {
+                preview.style.background = `repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 5px, transparent 5px, transparent 7px, ${lineColor} 7px, ${lineColor} 9px, transparent 9px, transparent 16px)`;
+            } else {
+                preview.style.backgroundColor = lineColor;
             }
-            preview.style.cssText = `
-                display: inline-block;
-                width: 20px;
-                height: 3px;
-                ${bgStyle}
-                margin-right: 8px;
-                vertical-align: middle;
-            `;
+            
             item.querySelector('.config-type-name').prepend(preview);
             
             container.appendChild(item);
