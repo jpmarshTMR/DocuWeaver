@@ -476,9 +476,19 @@
 
     function renderAssetGroupList() {
         const container = document.getElementById('asset-groups-list');
-        if (!container) return;
+        if (!container) {
+            console.warn('Asset groups container not found');
+            return;
+        }
 
         container.innerHTML = '';
+
+        if (!state.assets) {
+            console.warn('state.assets is undefined');
+            return;
+        }
+
+        console.log('Rendering asset groups. Total assets:', state.assets.length);
 
         const ungroupedAssets = state.assets.filter(a => !a.layer_group);
         if (ungroupedAssets.length > 0) {
@@ -498,9 +508,19 @@
 
     function renderLinkGroupList() {
         const container = document.getElementById('link-groups-list');
-        if (!container) return;
+        if (!container) {
+            console.warn('Link groups container not found');
+            return;
+        }
 
         container.innerHTML = '';
+
+        if (!state.links) {
+            console.warn('state.links is undefined');
+            return;
+        }
+
+        console.log('Rendering link groups. Total links:', state.links.length);
 
         const ungroupedLinks = state.links.filter(l => !l.layer_group);
         if (ungroupedLinks.length > 0) {

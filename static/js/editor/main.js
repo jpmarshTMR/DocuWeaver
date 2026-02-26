@@ -41,12 +41,6 @@
             renderAssetsOnCanvas();
             renderLinksOnCanvas();
             
-            // Render saved measurements
-            renderSavedMeasurementsOnCanvas();
-            
-            // Apply rendering hierarchy to order layer types correctly
-            applyRenderingHierarchy();
-            
             // Render sidebar lists
             renderSheetLayers();
             renderAssetList();
@@ -58,6 +52,12 @@
             if (typeof renderLayerGroupsUI === 'function') {
                 renderLayerGroupsUI();
             }
+            
+            // Render saved measurements
+            renderSavedMeasurementsOnCanvas();
+            
+            // Apply rendering hierarchy to order layer types correctly on canvas
+            applyRenderingHierarchy();
             
             // Load OSM if enabled
             if (state.osmEnabled && state.refAssetId) {
@@ -479,14 +479,18 @@
         
         // Group objects by type
         const objectsByType = {
+            osm: [],      // OSM tiles go at the very bottom
             sheets: [],
             links: [],
             assets: [],
-            measurements: []
+            measurements: [],
+            other: []  // For measurement previews, etc.
         };
         
         canvas.getObjects().forEach(obj => {
-            if (obj.sheetData) {
+            if (obj.isOSMTile || obj.osmTileData) {
+                objectsByType.osm.push(obj);
+            } else if (obj.sheetData) {
                 objectsByType.sheets.push(obj);
             } else if (obj.isLinkObject) {
                 objectsByType.links.push(obj);
@@ -494,6 +498,9 @@
                 objectsByType.assets.push(obj);
             } else if (obj.isMeasurementObject || obj.isSavedMeasurement || obj.isMeasurementGroup) {
                 objectsByType.measurements.push(obj);
+            } else {
+                // Uncategorized objects (measurement previews, etc.)
+                objectsByType.other.push(obj);
             }
         });
         
@@ -507,12 +514,25 @@
         // Apply hierarchy by moving objects to correct positions
         let currentIndex = 0;
         
+        // Always render OSM tiles first (at the bottom)
+        objectsByType.osm.forEach(obj => {
+            canvas.moveTo(obj, currentIndex);
+            currentIndex++;
+        });
+        
+        // Then render the configurable hierarchy
         state.renderingHierarchy.forEach(layerType => {
             const objects = objectsByType[layerType] || [];
             objects.forEach(obj => {
                 canvas.moveTo(obj, currentIndex);
                 currentIndex++;
             });
+        });
+        
+        // Finally, render other uncategorized objects on top
+        objectsByType.other.forEach(obj => {
+            canvas.moveTo(obj, currentIndex);
+            currentIndex++;
         });
         
         canvas.renderAll();
@@ -535,7 +555,10 @@
             measurements: '📐 Measurements'
         };
         
-        state.renderingHierarchy.forEach((layerType, index) => {
+        // Reverse the array for display so top of list = top on canvas
+        const displayOrder = [...state.renderingHierarchy].reverse();
+        
+        displayOrder.forEach((layerType, index) => {
             const item = document.createElement('div');
             item.className = 'hierarchy-item';
             item.dataset.layerType = layerType;
@@ -544,7 +567,7 @@
             item.innerHTML = `
                 <span class="drag-handle">⋮⋮</span>
                 <span class="layer-label">${labels[layerType]}</span>
-                <span class="layer-order">${index === 0 ? 'Bottom' : index === state.renderingHierarchy.length - 1 ? 'Top' : ''}</span>
+                <span class="layer-order">${index === 0 ? 'Top' : index === displayOrder.length - 1 ? 'Bottom' : ''}</span>
             `;
             
             // Drag and drop handlers
@@ -589,13 +612,14 @@
         const listContainer = document.getElementById('hierarchy-list');
         if (!listContainer) return;
         
-        // Read new order from DOM
+        // Read new order from DOM (top to bottom in UI)
         const newOrder = [];
         listContainer.querySelectorAll('.hierarchy-item').forEach(item => {
             newOrder.push(item.dataset.layerType);
         });
         
-        state.renderingHierarchy = newOrder;
+        // Reverse it back to storage format (bottom to top)
+        state.renderingHierarchy = newOrder.reverse();
         saveRenderingHierarchy();
         applyRenderingHierarchy();
         hideRenderingHierarchyModal();
