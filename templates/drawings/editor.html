@@ -1936,12 +1936,34 @@
         
         function syncPdfInversionWithTheme(theme) {
             // Auto-invert PDFs when in dark mode
-            if (typeof isPdfInverted !== 'undefined' && typeof applyPdfInversion === 'function') {
-                var shouldInvert = (theme === 'dark');
-                if (isPdfInverted !== shouldInvert) {
-                    isPdfInverted = shouldInvert;
-                    applyPdfInversion();
+            var shouldInvert = (theme === 'dark');
+            
+            // Update PDF inversion state
+            if (typeof DocuWeaver !== 'undefined' && DocuWeaver.state) {
+                DocuWeaver.state.isPdfInverted = shouldInvert;
+                window.isPdfInverted = shouldInvert; // For backward compatibility
+            }
+            
+            // Apply the inversion
+            if (typeof applyPdfInversion === 'function') {
+                applyPdfInversion();
+            }
+            
+            // Update OSM dark mode
+            if (typeof DocuWeaver !== 'undefined' && DocuWeaver.state) {
+                DocuWeaver.state.osmDarkMode = shouldInvert;
+                window.osmDarkMode = shouldInvert; // For backward compatibility
+                
+                // Refresh OSM tiles with new theme
+                if (typeof debouncedRefreshOSM === 'function') {
+                    debouncedRefreshOSM();
                 }
+            }
+            
+            // Update canvas background color
+            if (typeof DocuWeaver !== 'undefined' && DocuWeaver.state && DocuWeaver.state.canvas) {
+                DocuWeaver.state.canvas.backgroundColor = shouldInvert ? '#2a2a2a' : '#e0e0e0';
+                DocuWeaver.state.canvas.renderAll();
             }
         }
         
