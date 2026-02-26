@@ -89,7 +89,8 @@
             if (obj.sheetData) obj.shadow = null;
             if (obj.isLinkObject && obj.linkData && obj.linkData.id === linkId) {
                 canvas.setActiveObject(obj);
-                canvas.viewportCenterObject(obj);
+                // Don't center viewport - just select the object
+                // User may want to see it in context of current view
             }
         });
         canvas.renderAll();

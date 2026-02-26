@@ -113,7 +113,7 @@ const ToolSectionItem = (function() {
             hasVisibility: true,
             hasDelete: true,
             deleteConfirmText: (item) => `Delete link "${item.name || item.link_id}"?`,
-            onSelect: (item) => typeof selectLink === 'function' && selectLink(item.id),
+            onSelect: null, // Disabled - links are not rendered in correct position when selected from panel
             onDelete: async (item) => {
                 try {
                     const response = await fetch(`/api/links/${item.id}/`, {
@@ -441,11 +441,12 @@ const ToolSectionItem = (function() {
         });
 
         // Apply styling
+        const cursorStyle = config.onSelect ? 'pointer' : 'default';
         div.style.cssText = `
             display: flex;
             align-items: center;
             padding: 4px 8px;
-            cursor: pointer;
+            cursor: ${cursorStyle};
             border-radius: 4px;
             transition: background-color 0.15s;
             font-size: 0.85rem;
