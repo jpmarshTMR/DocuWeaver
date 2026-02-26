@@ -352,16 +352,25 @@ const ToolSectionItem = (function() {
         // Make draggable
         div.draggable = true;
         div.addEventListener('dragstart', (e) => {
-            if (typeof draggedItem !== 'undefined') {
-                window.draggedItem = { type: type, id: item.id, element: div };
+            // Set both window.draggedItem and state.draggedItem for compatibility
+            const dragData = { type: type, id: item.id, element: div };
+            window.draggedItem = dragData;
+            
+            // Also set in DocuWeaver state if available
+            if (typeof DocuWeaver !== 'undefined' && DocuWeaver.state) {
+                DocuWeaver.state.draggedItem = dragData;
             }
+            
             div.classList.add('dragging');
             e.stopPropagation();
         });
         div.addEventListener('dragend', () => {
             div.classList.remove('dragging');
-            if (typeof draggedItem !== 'undefined') {
-                window.draggedItem = null;
+            window.draggedItem = null;
+            
+            // Clear from DocuWeaver state if available
+            if (typeof DocuWeaver !== 'undefined' && DocuWeaver.state) {
+                DocuWeaver.state.draggedItem = null;
             }
         });
 

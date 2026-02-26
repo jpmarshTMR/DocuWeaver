@@ -1498,8 +1498,53 @@
             });
 
             if (resp.ok) {
+                // Reload layer groups to get updated folder structure
                 await loadLayerGroups();
-                if (typeof loadProjectData === 'function') await loadProjectData();
+                
+                // Only reload the specific item type that was moved, not all project data
+                if (itemType === 'measurement') {
+                    // Reload measurements and re-render measurement UI
+                    if (typeof MeasurementTool !== 'undefined' && MeasurementTool.loadSaved) {
+                        await MeasurementTool.loadSaved();
+                    }
+                    await renderMeasurementGroupList();
+                    if (typeof renderUnifiedList === 'function') {
+                        renderUnifiedList();
+                    }
+                } else if (itemType === 'asset') {
+                    // Reload assets
+                    const assetsResp = await fetch(`/api/projects/${PROJECT_ID}/assets/`);
+                    if (assetsResp.ok) {
+                        state.assets = await assetsResp.json();
+                        window.assets = state.assets;
+                    }
+                    renderAssetGroupList();
+                    if (typeof renderUnifiedList === 'function') {
+                        renderUnifiedList();
+                    }
+                } else if (itemType === 'link') {
+                    // Reload links
+                    const linksResp = await fetch(`/api/projects/${PROJECT_ID}/links/`);
+                    if (linksResp.ok) {
+                        state.links = await linksResp.json();
+                        window.links = state.links;
+                    }
+                    renderLinkGroupList();
+                    if (typeof renderUnifiedList === 'function') {
+                        renderUnifiedList();
+                    }
+                } else if (itemType === 'sheet') {
+                    // Reload sheets
+                    const sheetsResp = await fetch(`/api/projects/${PROJECT_ID}/sheets/`);
+                    if (sheetsResp.ok) {
+                        state.sheets = await sheetsResp.json();
+                        window.sheets = state.sheets;
+                    }
+                    renderSheetGroupList();
+                    if (typeof renderUnifiedList === 'function') {
+                        renderUnifiedList();
+                    }
+                }
             } else {
                 var data = await resp.json();
                 alert(data.error || 'Failed to move item');
