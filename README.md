@@ -38,7 +38,7 @@ cd docuweaver
 
 # Create a virtual environment
 python -m venv venv
-venv\Scripts\activate        # Windows
+venv\Scripts\activate.bat        # Windows
 # source venv/bin/activate   # macOS/Linux
 
 # Install dependencies
@@ -52,6 +52,8 @@ cp .env.example .env
 ### Setup
 
 ```bash
+# Make Migrations
+python manage.py makemigrations
 # Run migrations
 python manage.py migrate
 # Create a superuser (optional, for admin access)
