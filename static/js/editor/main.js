@@ -41,6 +41,12 @@
             renderAssetsOnCanvas();
             renderLinksOnCanvas();
             
+            // Render saved measurements
+            renderSavedMeasurementsOnCanvas();
+            
+            // Apply rendering hierarchy to order layer types correctly
+            applyRenderingHierarchy();
+            
             // Render sidebar lists
             renderSheetLayers();
             renderAssetList();
@@ -57,9 +63,6 @@
             if (state.osmEnabled && state.refAssetId) {
                 renderOSMLayer();
             }
-
-            // Render saved measurements
-            renderSavedMeasurementsOnCanvas();
 
         } catch (error) {
             console.error('Error loading project data:', error);
@@ -444,7 +447,158 @@
         // Initialize layer section sorting
         initLayerSectionSorting();
         
+        // Load rendering hierarchy from localStorage
+        loadRenderingHierarchy();
+        
         console.log('DocuWeaver Editor initialized');
+    }
+    
+    // ==================== Rendering Hierarchy ====================
+    
+    function loadRenderingHierarchy() {
+        const saved = localStorage.getItem(`docuweaver-rendering-hierarchy-${PROJECT_ID}`);
+        if (saved) {
+            try {
+                state.renderingHierarchy = JSON.parse(saved);
+            } catch (e) {
+                console.error('Error loading rendering hierarchy:', e);
+            }
+        }
+    }
+    
+    function saveRenderingHierarchy() {
+        localStorage.setItem(
+            `docuweaver-rendering-hierarchy-${PROJECT_ID}`,
+            JSON.stringify(state.renderingHierarchy)
+        );
+    }
+    
+    function applyRenderingHierarchy() {
+        const canvas = state.canvas;
+        if (!canvas) return;
+        
+        // Group objects by type
+        const objectsByType = {
+            sheets: [],
+            links: [],
+            assets: [],
+            measurements: []
+        };
+        
+        canvas.getObjects().forEach(obj => {
+            if (obj.sheetData) {
+                objectsByType.sheets.push(obj);
+            } else if (obj.isLinkObject) {
+                objectsByType.links.push(obj);
+            } else if (obj.assetData) {
+                objectsByType.assets.push(obj);
+            } else if (obj.isMeasurementObject || obj.isSavedMeasurement || obj.isMeasurementGroup) {
+                objectsByType.measurements.push(obj);
+            }
+        });
+        
+        // Sort sheets by their Z-index (maintain sheet ordering)
+        objectsByType.sheets.sort((a, b) => {
+            const zA = a.sheetData?.z_index || 0;
+            const zB = b.sheetData?.z_index || 0;
+            return zA - zB;
+        });
+        
+        // Apply hierarchy by moving objects to correct positions
+        let currentIndex = 0;
+        
+        state.renderingHierarchy.forEach(layerType => {
+            const objects = objectsByType[layerType] || [];
+            objects.forEach(obj => {
+                canvas.moveTo(obj, currentIndex);
+                currentIndex++;
+            });
+        });
+        
+        canvas.renderAll();
+    }
+    
+    function showRenderingHierarchyModal() {
+        const modal = document.getElementById('renderingHierarchyModal');
+        if (!modal) return;
+        
+        // Populate current order
+        const listContainer = document.getElementById('hierarchy-list');
+        if (!listContainer) return;
+        
+        listContainer.innerHTML = '';
+        
+        const labels = {
+            sheets: '📄 Sheets',
+            links: '🔗 Links',
+            assets: '📍 Assets',
+            measurements: '📐 Measurements'
+        };
+        
+        state.renderingHierarchy.forEach((layerType, index) => {
+            const item = document.createElement('div');
+            item.className = 'hierarchy-item';
+            item.dataset.layerType = layerType;
+            item.draggable = true;
+            
+            item.innerHTML = `
+                <span class="drag-handle">⋮⋮</span>
+                <span class="layer-label">${labels[layerType]}</span>
+                <span class="layer-order">${index === 0 ? 'Bottom' : index === state.renderingHierarchy.length - 1 ? 'Top' : ''}</span>
+            `;
+            
+            // Drag and drop handlers
+            item.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', layerType);
+                item.classList.add('dragging');
+            });
+            
+            item.addEventListener('dragend', () => {
+                item.classList.remove('dragging');
+            });
+            
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                
+                const dragging = listContainer.querySelector('.dragging');
+                if (dragging && dragging !== item) {
+                    const rect = item.getBoundingClientRect();
+                    const midpoint = rect.top + rect.height / 2;
+                    if (e.clientY < midpoint) {
+                        listContainer.insertBefore(dragging, item);
+                    } else {
+                        listContainer.insertBefore(dragging, item.nextSibling);
+                    }
+                }
+            });
+            
+            listContainer.appendChild(item);
+        });
+        
+        modal.style.display = 'flex';
+    }
+    
+    function hideRenderingHierarchyModal() {
+        const modal = document.getElementById('renderingHierarchyModal');
+        if (modal) modal.style.display = 'none';
+    }
+    
+    function applyHierarchyChanges() {
+        const listContainer = document.getElementById('hierarchy-list');
+        if (!listContainer) return;
+        
+        // Read new order from DOM
+        const newOrder = [];
+        listContainer.querySelectorAll('.hierarchy-item').forEach(item => {
+            newOrder.push(item.dataset.layerType);
+        });
+        
+        state.renderingHierarchy = newOrder;
+        saveRenderingHierarchy();
+        applyRenderingHierarchy();
+        hideRenderingHierarchyModal();
     }
     
     // ==================== Public API ====================
@@ -462,6 +616,12 @@
         toggleLayerGroup,
         toggleGroupVisibility,
         toggleBatchVisibility,
+        loadRenderingHierarchy,
+        saveRenderingHierarchy,
+        applyRenderingHierarchy,
+        showRenderingHierarchyModal,
+        hideRenderingHierarchyModal,
+        applyHierarchyChanges,
         initEditor
     };
     
@@ -479,6 +639,10 @@
     window.toggleLayerGroup = toggleLayerGroup;
     window.toggleGroupVisibility = toggleGroupVisibility;
     window.toggleBatchVisibility = toggleBatchVisibility;
+    window.showRenderingHierarchyModal = showRenderingHierarchyModal;
+    window.hideRenderingHierarchyModal = hideRenderingHierarchyModal;
+    window.applyHierarchyChanges = applyHierarchyChanges;
+    window.applyRenderingHierarchy = applyRenderingHierarchy;
     
     // Auto-initialize on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', function() {

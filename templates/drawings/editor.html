@@ -1372,6 +1372,7 @@
             <button class="ftool-btn" data-mode="measure" onclick="toggleMeasurePanel()" title="Measure">📐</button>
             <div class="ftool-separator"></div>
             <button class="ftool-btn" id="osm-toggle-btn" onclick="toggleOSMLayer()" title="Toggle OpenStreetMap Layer">🗺️</button>
+            <button class="ftool-btn" onclick="showRenderingHierarchyModal()" title="Rendering Order">📚</button>
             <div class="ftool-separator"></div>
             <button class="ftool-btn" data-mode="crop" onclick="setMode('crop')" title="Cut Line">✂</button>
             <button class="ftool-btn context-tool" id="ftool-flip" onclick="flipSelectedSheetCut()" title="Flip Cut Side" style="display:none;">⟲</button>
@@ -1754,6 +1755,25 @@
     </div>
 </div>
 
+<!-- Rendering Hierarchy Modal -->
+<div id="renderingHierarchyModal" class="modal">
+    <div class="modal-content" style="max-width: 420px; padding: 1.5rem;">
+        <h2 style="margin-bottom: 1rem; font-size: 1.1rem;">📚 Rendering Order</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+            Drag to reorder layer types. Top items render above bottom items. Sheet Z-index controls order within the Sheets layer.
+        </p>
+        
+        <div id="hierarchy-list" style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem;">
+            <!-- Populated dynamically -->
+        </div>
+        
+        <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+            <button type="button" class="btn" style="background: var(--btn-secondary);" onclick="hideRenderingHierarchyModal()">Cancel</button>
+            <button type="button" class="btn btn-success" onclick="applyHierarchyChanges()">Apply</button>
+        </div>
+    </div>
+</div>
+
 <style>
     /* Measurement config modal - lighter overlay */
     .measurement-config-modal {
@@ -1879,6 +1899,46 @@
         height: 3px;
         margin-right: 8px;
         vertical-align: middle;
+    }
+
+    /* Rendering Hierarchy Modal */
+    .hierarchy-item {
+        display: flex;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        background: var(--bg-sidebar);
+        border: 2px solid var(--border-light);
+        border-radius: 6px;
+        cursor: move;
+        transition: all 0.2s;
+        user-select: none;
+    }
+    .hierarchy-item:hover {
+        background: var(--bg-layer-item-hover);
+        border-color: var(--bg-tool-btn-active);
+    }
+    .hierarchy-item.dragging {
+        opacity: 0.5;
+        transform: scale(0.98);
+    }
+    .hierarchy-item .drag-handle {
+        font-size: 1rem;
+        margin-right: 0.75rem;
+        color: var(--text-muted);
+        cursor: grab;
+    }
+    .hierarchy-item .drag-handle:active {
+        cursor: grabbing;
+    }
+    .hierarchy-item .layer-label {
+        flex: 1;
+        font-size: 0.95rem;
+        font-weight: 500;
+    }
+    .hierarchy-item .layer-order {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        font-style: italic;
     }
 </style>
 

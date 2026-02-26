@@ -38,11 +38,17 @@
     // ==================== Measurement Tool UI ====================
     
     function bringMeasurementsToFront() {
-        const canvas = state.canvas;
-        const measurements = canvas.getObjects().filter(obj => 
-            obj.isMeasurement || obj.isMeasurementGroup || obj.isSavedMeasurement
-        );
-        measurements.forEach(m => canvas.bringToFront(m));
+        // Use rendering hierarchy instead of always bringing to front
+        if (typeof applyRenderingHierarchy === 'function') {
+            applyRenderingHierarchy();
+        } else {
+            // Fallback to old behavior if hierarchy system not available
+            const canvas = state.canvas;
+            const measurements = canvas.getObjects().filter(obj => 
+                obj.isMeasurement || obj.isMeasurementGroup || obj.isSavedMeasurement
+            );
+            measurements.forEach(m => canvas.bringToFront(m));
+        }
     }
     
     function removeMeasurePreview() {

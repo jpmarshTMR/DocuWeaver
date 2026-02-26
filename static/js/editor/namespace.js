@@ -92,6 +92,10 @@ DocuWeaver.state = {
     // PDF inversion
     isPdfInverted: false,
     
+    // Rendering hierarchy (order in which layer types are rendered)
+    // Default order: sheets (bottom), links, assets, measurements (top)
+    renderingHierarchy: ['sheets', 'links', 'assets', 'measurements'],
+    
     // Layer groups
     assetGroups: [],
     linkGroups: [],
