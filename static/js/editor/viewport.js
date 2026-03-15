@@ -15,6 +15,10 @@
     // Debounce timers
     let rotationSaveTimeout = null;
     let viewportSaveTimeout = null;
+
+    // Throttle for cursor position updates
+    let lastCursorUpdate = 0;
+    const CURSOR_THROTTLE_MS = 50; // ~20fps for cursor display
     
     // ==================== Zoom Functions ====================
     
@@ -50,7 +54,7 @@
         if (zoom > 5) zoom = 5;
         if (zoom < 0.1) zoom = 0.1;
         
-        console.log('zoomToPoint called:', { point, newZoom: zoom, currentZoom: state.currentZoomLevel, rotation: state.viewportRotation });
+        // Debug logging removed for performance
         
         // If no rotation, use Fabric's native method which is proven to work
         if (state.viewportRotation === 0) {
@@ -86,7 +90,6 @@
         const screenX = canvasX * vpt[0] + canvasY * vpt[2] + vpt[4];
         const screenY = canvasX * vpt[1] + canvasY * vpt[3] + vpt[5];
         
-        console.log('Screen coords before zoom:', { screenX, screenY });
         
         // Now update the zoom in the transform matrix (keeping rotation)
         vpt[0] = cos * zoom;
@@ -99,13 +102,11 @@
         const newScreenX = canvasX * vpt[0] + canvasY * vpt[2] + vpt[4];
         const newScreenY = canvasX * vpt[1] + canvasY * vpt[3] + vpt[5];
         
-        console.log('Screen coords after zoom (before translation fix):', { newScreenX, newScreenY });
         
         // Calculate the offset needed to keep the point at the same screen position
         const offsetX = screenX - newScreenX;
         const offsetY = screenY - newScreenY;
         
-        console.log('Applying offset:', { offsetX, offsetY });
         
         // Apply the offset
         vpt[4] += offsetX;
@@ -213,12 +214,9 @@
         vpt[3] = cos * zoom;
         
         canvas.setViewportTransform(vpt);
-        
-        canvas.forEachObject(function(obj) {
-            obj.setCoords();
-        });
+        canvas.requestRenderAll();
     }
-    
+
     function zoomFit() {
         const canvas = state.canvas;
         const objects = canvas.getObjects().filter(obj => obj.sheetData);
@@ -377,12 +375,7 @@
         vpt[5] = panY;
         
         canvas.setViewportTransform(vpt);
-        
-        canvas.forEachObject(function(obj) {
-            obj.setCoords();
-        });
-        
-        canvas.renderAll();
+        canvas.requestRenderAll();
         
         // Refresh OSM tiles for new viewport
         if (typeof debouncedRefreshOSM === 'function') {
@@ -496,18 +489,22 @@
     // ==================== Cursor Position ====================
     
     function updateCursorPosition(opt) {
+        const now = performance.now();
+        if (now - lastCursorUpdate < CURSOR_THROTTLE_MS) return;
+        lastCursorUpdate = now;
+
         const cursorEl = document.getElementById('cursor-position');
         if (!cursorEl) return;
-        
+
         const canvas = state.canvas;
         const pointer = canvas.getPointer(opt.e);
         const ppm = PROJECT_DATA.pixels_per_meter;
-        
+
         if (!ppm || !isFinite(ppm) || ppm <= 0) {
             cursorEl.textContent = `${pointer.x.toFixed(0)}px, ${pointer.y.toFixed(0)}px`;
             return;
         }
-        
+
         if (typeof pixelToAssetMeter === 'function') {
             const pos = pixelToAssetMeter(pointer.x, pointer.y);
             cursorEl.textContent = `${pos.x.toFixed(2)}m, ${pos.y.toFixed(2)}m`;

@@ -182,7 +182,7 @@
             state.measurePreviewLabel.set({ text: label, left: midX, top: midY - 18 });
         }
         canvas.bringToFront(state.measurePreviewLabel);
-        canvas.renderAll();
+        canvas.requestRenderAll();
     }
     
     function updateMeasurePanel() {
@@ -611,10 +611,53 @@
         
         MeasurementTool.updateConfig(config);
         hideMeasurementConfigModal();
-        
+        updateConfigPreviewBar();
+
         console.log('Measurement config saved:', config);
     }
     
+    function onMeasureConfigTypeChange(value) {
+        if (typeof MeasurementTool === 'undefined') return;
+        MeasurementTool.setConfigType(value);
+        updateConfigPreviewBar();
+    }
+
+    function populateConfigTypeSelect() {
+        const select = document.getElementById('measure-config-type');
+        if (!select || typeof MeasurementTool === 'undefined') return;
+
+        const configTypes = MeasurementTool.getConfigTypes();
+        const currentType = MeasurementTool.getCurrentConfigType();
+        select.innerHTML = '';
+
+        Object.entries(configTypes).forEach(([key, ct]) => {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = ct.name || key;
+            if (key === currentType) option.selected = true;
+            select.appendChild(option);
+        });
+
+        updateConfigPreviewBar();
+    }
+
+    function updateConfigPreviewBar() {
+        const preview = document.getElementById('measure-config-preview');
+        if (!preview || typeof MeasurementTool === 'undefined') return;
+
+        const config = MeasurementTool.getConfig();
+        const lineColor = config.lineColor || '#00bcd4';
+        const lineStyle = config.lineStyle || 'dashed';
+
+        if (lineStyle === 'dashed') {
+            preview.style.background = `repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 5px, transparent 5px, transparent 10px)`;
+        } else if (lineStyle === 'dotted') {
+            preview.style.background = `repeating-linear-gradient(90deg, ${lineColor} 0px, ${lineColor} 2px, transparent 2px, transparent 5px)`;
+        } else {
+            preview.style.background = lineColor;
+        }
+    }
+
     function refreshConfigTypesList() {
         const container = document.getElementById('config-presets-list');
         if (!container || typeof MeasurementTool === 'undefined') return;
@@ -685,6 +728,7 @@
         }
         
         refreshConfigTypesList();
+        populateConfigTypeSelect();
         console.log('Applied config type:', name);
     }
     
@@ -830,7 +874,10 @@
         addNewConfigType,
         editConfigType,
         saveAndUpdateConfigType,
-        deleteConfigTypeHandler
+        deleteConfigTypeHandler,
+        onMeasureConfigTypeChange,
+        populateConfigTypeSelect,
+        updateConfigPreviewBar
     };
     
     // Expose globally for backward compatibility
@@ -866,6 +913,9 @@
     window.editConfigType = editConfigType;
     window.saveAndUpdateConfigType = saveAndUpdateConfigType;
     window.deleteConfigTypeHandler = deleteConfigTypeHandler;
-    
+    window.onMeasureConfigTypeChange = onMeasureConfigTypeChange;
+    window.populateConfigTypeSelect = populateConfigTypeSelect;
+    window.updateConfigPreviewBar = updateConfigPreviewBar;
+
     console.log('DocuWeaver measurements module loaded');
 })();

@@ -78,32 +78,46 @@
                 this.isMeasurement || this.isMeasurementGroup || this.isSavedMeasurement) {
                 return true;
             }
-            
-            // Smart culling for other objects (assets)
-            const objBounds = this.getBoundingRect(true, true);
-            if (!objBounds) return true;
-            
+
             const canvasEl = this.canvas;
             if (!canvasEl) return true;
-            
-            // Generous buffer for smooth scrolling and rotation
+
+            // Use aCoords (already calculated by Fabric) when available, avoiding expensive getBoundingRect
+            const coords = this.aCoords;
+            if (coords) {
+                const bufferX = canvasEl.width * 0.5;
+                const bufferY = canvasEl.height * 0.5;
+
+                // Get screen-space bounds from aCoords
+                const vpt = canvasEl.viewportTransform;
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const key in coords) {
+                    const pt = coords[key];
+                    const sx = pt.x * vpt[0] + pt.y * vpt[2] + vpt[4];
+                    const sy = pt.x * vpt[1] + pt.y * vpt[3] + vpt[5];
+                    if (sx < minX) minX = sx;
+                    if (sy < minY) minY = sy;
+                    if (sx > maxX) maxX = sx;
+                    if (sy > maxY) maxY = sy;
+                }
+
+                return !(maxX < -bufferX ||
+                        minX > canvasEl.width + bufferX ||
+                        maxY < -bufferY ||
+                        minY > canvasEl.height + bufferY);
+            }
+
+            // Fallback for objects without aCoords
+            const objBounds = this.getBoundingRect(true, true);
+            if (!objBounds) return true;
+
             const bufferX = canvasEl.width * 0.5;
             const bufferY = canvasEl.height * 0.5;
-            
-            const viewportLeft = -bufferX;
-            const viewportTop = -bufferY;
-            const viewportRight = canvasEl.width + bufferX;
-            const viewportBottom = canvasEl.height + bufferY;
-            
-            const objLeft = objBounds.left;
-            const objTop = objBounds.top;
-            const objRight = objBounds.left + objBounds.width;
-            const objBottom = objBounds.top + objBounds.height;
-            
-            return !(objRight < viewportLeft || 
-                    objLeft > viewportRight || 
-                    objBottom < viewportTop || 
-                    objTop > viewportBottom);
+
+            return !(objBounds.left + objBounds.width < -bufferX ||
+                    objBounds.left > canvasEl.width + bufferX ||
+                    objBounds.top + objBounds.height < -bufferY ||
+                    objBounds.top > canvasEl.height + bufferY);
         };
     }
     
@@ -113,6 +127,8 @@
     let isMiddleClickPanning = false;
     let lastPosX, lastPosY;
     let interactionStartState = null;
+    let lastMeasureMoveTime = 0;
+    const MEASURE_MOVE_THROTTLE_MS = 32; // ~30fps for measurement preview
     
     function setupCanvasEvents() {
         const canvas = state.canvas;
@@ -226,8 +242,12 @@
         } else if (state.currentMode === 'split' && state.isSplitting) {
             DW.tools.handleSplitMove(opt);
         } else if (state.currentMode === 'measure') {
-            const pointer = canvas.getPointer(evt);
-            MeasurementTool.handleMouseMove(pointer.x, pointer.y);
+            const now = performance.now();
+            if (now - lastMeasureMoveTime >= MEASURE_MOVE_THROTTLE_MS) {
+                lastMeasureMoveTime = now;
+                const pointer = canvas.getPointer(evt);
+                MeasurementTool.handleMouseMove(pointer.x, pointer.y);
+            }
         }
     }
     
@@ -277,12 +297,6 @@
             y: evt.clientY - rect.top
         };
         
-        console.log('Mouse wheel zoom:', {
-            screenPoint: screenPoint,
-            oldZoom: state.currentZoomLevel,
-            newZoom: zoom,
-            viewportRotation: state.viewportRotation
-        });
         
         if (typeof zoomToScreenPoint === 'function') {
             zoomToScreenPoint(screenPoint, zoom);
