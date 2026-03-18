@@ -88,6 +88,9 @@
         // Start measurement tool when entering measure mode
         if (mode === 'measure' && typeof MeasurementTool !== 'undefined') {
             MeasurementTool.startMeasurement(state.measureMode || 'single');
+            if (typeof populateConfigTypeSelect === 'function') {
+                populateConfigTypeSelect();
+            }
         }
         
         // Update object selectability
@@ -102,8 +105,8 @@
                 obj.evented = isSelectMode;
             }
         });
-        
-        canvas.renderAll();
+
+        canvas.requestRenderAll();
         
         // Update mode display
         const modeDisplay = document.getElementById('current-mode');
