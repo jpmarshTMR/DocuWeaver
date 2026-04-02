@@ -173,7 +173,7 @@
     
     function updateContextTools() {
         const hasSheet = !!state.selectedSheet;
-        const hasCut = hasSheet && state.sheetCutData[state.selectedSheet.id] && 
+        const hasCut = hasSheet && state.sheetCutData[state.selectedSheet.id] &&
                        state.sheetCutData[state.selectedSheet.id].length > 0;
 
         const flipBtn = document.getElementById('ftool-flip');
@@ -185,8 +185,19 @@
         if (showUncutBtn) showUncutBtn.style.display = (hasSheet && hasCut) ? 'flex' : 'none';
 
         if (showUncutBtn) {
-            showUncutBtn.classList.toggle('active', 
+            showUncutBtn.classList.toggle('active',
                 state.showUncutSheetId === (state.selectedSheet && state.selectedSheet.id));
+        }
+
+        // Update cut toggle button in properties panel
+        const cutToggleSection = document.getElementById('cut-toggle-section');
+        const cutToggleBtn = document.getElementById('toggle-cuts-btn');
+        if (cutToggleSection) {
+            cutToggleSection.style.display = hasCut ? 'block' : 'none';
+        }
+        if (cutToggleBtn && hasSheet) {
+            const isShowingUncut = state.showUncutSheetId === state.selectedSheet.id;
+            cutToggleBtn.textContent = isShowingUncut ? 'Show Cuts' : 'Show Original (Hide Cuts)';
         }
     }
     

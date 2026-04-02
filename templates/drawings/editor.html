@@ -1352,7 +1352,10 @@
             </a>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0.5rem 0;">Includes PDFs and all data</p>
             <button class="btn" style="width: 100%; margin-top: 0.5rem;" onclick="downloadReport()">
-                📊 Adjustment Report
+                Adjustment Report
+            </button>
+            <button class="btn" style="width: 100%; margin-top: 0.5rem;" onclick="exportStitchedImage()">
+                Export Stitched Image (PNG)
             </button>
         </div>
     </div>
@@ -1439,6 +1442,14 @@
                     <label>Z-Index (layer order)</label>
                     <input type="number" id="sheet-zindex" onchange="updateSheetProperty('z_index', this.value)">
                 </div>
+                <!-- Cut Toggle -->
+                <div id="cut-toggle-section" style="display: none; margin-top: 0.5rem;">
+                    <button id="toggle-cuts-btn" class="btn" style="width: 100%; font-size: 0.85rem;"
+                        onclick="toggleShowUncut()">
+                        Show Original (Hide Cuts)
+                    </button>
+                </div>
+
                 <!-- PDF Layers (OCG) -->
                 <div id="pdf-layers-section" style="display: none; margin-top: 1rem;">
                     <h4 style="margin-bottom: 0.5rem;">PDF Layers</h4>

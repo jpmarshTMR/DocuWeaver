@@ -506,6 +506,95 @@
         window.open('/api/projects/' + PROJECT_ID + '/adjustment-report/?format=csv', '_blank');
     }
 
+    function exportStitchedImage() {
+        var canvas = state.canvas;
+        var sheetObjs = canvas.getObjects().filter(function(obj) {
+            return obj.sheetData && obj.visible !== false;
+        });
+
+        if (sheetObjs.length === 0) {
+            DW.showToast('No visible sheets to export', 'error');
+            return;
+        }
+
+        // Compute bounding box of all visible sheets
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        sheetObjs.forEach(function(obj) {
+            var bound = obj.getBoundingRect(true);
+            if (bound.left < minX) minX = bound.left;
+            if (bound.top < minY) minY = bound.top;
+            if (bound.left + bound.width > maxX) maxX = bound.left + bound.width;
+            if (bound.top + bound.height > maxY) maxY = bound.top + bound.height;
+        });
+
+        var exportWidth = Math.ceil(maxX - minX);
+        var exportHeight = Math.ceil(maxY - minY);
+
+        if (exportWidth <= 0 || exportHeight <= 0) {
+            DW.showToast('Nothing to export', 'error');
+            return;
+        }
+
+        // Warn if very large
+        var megapixels = (exportWidth * exportHeight) / 1000000;
+        if (megapixels > 100) {
+            if (!confirm('The stitched image will be very large (' +
+                exportWidth + 'x' + exportHeight + ', ' +
+                megapixels.toFixed(0) + ' MP). Continue?')) {
+                return;
+            }
+        }
+
+        DW.showToast('Generating stitched image...', 'info');
+
+        // Create offscreen canvas
+        var offscreen = document.createElement('canvas');
+        offscreen.width = exportWidth;
+        offscreen.height = exportHeight;
+        var ctx = offscreen.getContext('2d');
+
+        // Fill with white background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, exportWidth, exportHeight);
+
+        // Sort by z_index so lower sheets are drawn first
+        var sorted = sheetObjs.slice().sort(function(a, b) {
+            return (a.sheetData.z_index || 0) - (b.sheetData.z_index || 0);
+        });
+
+        // Draw each sheet
+        var loaded = 0;
+        var total = sorted.length;
+
+        sorted.forEach(function(obj) {
+            // Get the object's own canvas element
+            var objCanvas = obj.toCanvasElement();
+
+            // Position relative to the bounding box origin
+            var bound = obj.getBoundingRect(true);
+            var drawX = bound.left - minX;
+            var drawY = bound.top - minY;
+
+            ctx.drawImage(objCanvas, drawX, drawY);
+
+            loaded++;
+            if (loaded === total) {
+                // All drawn — trigger download
+                offscreen.toBlob(function(blob) {
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'stitched_sheets.png';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    DW.showToast('Stitched image downloaded', 'success');
+                }, 'image/png');
+            }
+        });
+    }
+
     // ==================== Import Batches ====================
 
     async function renderImportBatches() {
@@ -861,6 +950,7 @@
         importLinksStepBack: importLinksStepBack,
         importLinksWithMapping: importLinksWithMapping,
         exportProject: exportProject,
+        exportStitchedImage: exportStitchedImage,
         downloadReport: downloadReport,
         renderImportBatches: renderImportBatches,
         renderLinkImportBatches: renderLinkImportBatches,
@@ -889,6 +979,7 @@
     window.importLinksStepBack = importLinksStepBack;
     window.importLinksWithMapping = importLinksWithMapping;
     window.exportProject = exportProject;
+    window.exportStitchedImage = exportStitchedImage;
     window.downloadReport = downloadReport;
     window.renderImportBatches = renderImportBatches;
     window.renderLinkImportBatches = renderLinkImportBatches;
