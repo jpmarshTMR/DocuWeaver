@@ -11,9 +11,20 @@ class AssetTypeSerializer(serializers.ModelSerializer):
 
 
 class JoinMarkSerializer(serializers.ModelSerializer):
+    linked_sheet_id = serializers.SerializerMethodField()
+
     class Meta:
         model = JoinMark
-        fields = ['id', 'sheet', 'x', 'y', 'reference_label', 'linked_mark']
+        fields = [
+            'id', 'sheet', 'x', 'y', 'reference_label',
+            'edge', 'shape', 'confidence', 'auto_detected',
+            'linked_mark', 'linked_sheet_id',
+        ]
+
+    def get_linked_sheet_id(self, obj):
+        if obj.linked_mark_id:
+            return obj.linked_mark.sheet_id
+        return None
 
 
 class SheetSerializer(serializers.ModelSerializer):

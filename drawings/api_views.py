@@ -10,18 +10,19 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Project, Sheet, Asset, AdjustmentLog, AssetType, ColumnPreset, ImportBatch, Link, LayerGroup, MeasurementSet
+from .models import Project, Sheet, Asset, AdjustmentLog, AssetType, ColumnPreset, ImportBatch, Link, LayerGroup, MeasurementSet, JoinMark
 
 logger = logging.getLogger(__name__)
 from .serializers import (
     ProjectSerializer, ProjectListSerializer,
     SheetSerializer, AssetSerializer, AdjustmentLogSerializer,
     ImportBatchSerializer, LinkSerializer, LayerGroupSerializer, MeasurementSetSerializer,
-    CalibrateProjectSerializer,
+    CalibrateProjectSerializer, JoinMarkSerializer,
 )
 from .services.pdf_processor import render_pdf_page, get_pdf_page_count
 from .services.csv_importer import import_assets_from_csv, import_links_from_csv
 from .services.export_service import export_sheet_with_overlays, generate_adjustment_report
+from .services.join_mark_detector import detect_join_marks, compute_alignment
 
 
 class ProjectListCreate(generics.ListCreateAPIView):
@@ -163,6 +164,176 @@ def set_sheet_layers(request, pk):
     except Exception as e:
         logger.error("Failed to re-render sheet %d with layers: %s", pk, e)
         return Response({'status': 'error', 'message': 'Failed to render sheet with layer changes'}, status=500)
+
+
+# ==================== Join Mark Endpoints ====================
+
+@api_view(['POST'])
+def detect_sheet_join_marks(request, pk):
+    """Run join mark detection on a sheet's rendered image."""
+    sheet = get_object_or_404(Sheet, pk=pk)
+
+    if not sheet.rendered_image:
+        return Response({'error': 'Sheet has no rendered image'}, status=400)
+
+    # Optional: clear previously auto-detected marks
+    clear = request.data.get('clear_existing', True)
+    if clear:
+        sheet.join_marks.filter(auto_detected=True).delete()
+
+    try:
+        marks = detect_join_marks(sheet.rendered_image.path)
+    except Exception as e:
+        logger.error("Join mark detection failed for sheet %d: %s", pk, e)
+        return Response({'error': 'Detection failed'}, status=500)
+
+    # Create JoinMark objects
+    created = []
+    for mark in marks:
+        jm = JoinMark.objects.create(
+            sheet=sheet,
+            x=mark['x'],
+            y=mark['y'],
+            edge=mark['edge'],
+            shape=mark['shape'],
+            confidence=mark['confidence'],
+            auto_detected=True,
+            reference_label=f"{mark['shape']} ({mark['edge']})",
+        )
+        created.append(jm)
+
+    serializer = JoinMarkSerializer(created, many=True)
+    return Response({
+        'detected': len(created),
+        'marks': serializer.data,
+    })
+
+
+@api_view(['GET'])
+def list_sheet_join_marks(request, pk):
+    """List all join marks for a sheet."""
+    sheet = get_object_or_404(Sheet, pk=pk)
+    marks = sheet.join_marks.select_related('linked_mark').all()
+    serializer = JoinMarkSerializer(marks, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+def create_join_mark(request, pk):
+    """Manually create a join mark on a sheet."""
+    sheet = get_object_or_404(Sheet, pk=pk)
+
+    x = request.data.get('x')
+    y = request.data.get('y')
+    if x is None or y is None:
+        return Response({'error': 'x and y are required'}, status=400)
+
+    jm = JoinMark.objects.create(
+        sheet=sheet,
+        x=float(x),
+        y=float(y),
+        reference_label=request.data.get('reference_label', ''),
+        edge=request.data.get('edge', ''),
+        shape='manual',
+        confidence=1.0,
+        auto_detected=False,
+    )
+    return Response(JoinMarkSerializer(jm).data, status=201)
+
+
+@api_view(['DELETE'])
+def delete_join_mark(request, pk):
+    """Delete a join mark."""
+    jm = get_object_or_404(JoinMark, pk=pk)
+    # Unlink any marks that reference this one
+    JoinMark.objects.filter(linked_mark=jm).update(linked_mark=None)
+    jm.delete()
+    return Response(status=204)
+
+
+@api_view(['POST'])
+def link_join_marks(request):
+    """Link two join marks together (bidirectional)."""
+    mark_a_id = request.data.get('mark_a')
+    mark_b_id = request.data.get('mark_b')
+
+    if not mark_a_id or not mark_b_id:
+        return Response({'error': 'mark_a and mark_b are required'}, status=400)
+
+    mark_a = get_object_or_404(JoinMark, pk=mark_a_id)
+    mark_b = get_object_or_404(JoinMark, pk=mark_b_id)
+
+    if mark_a.sheet_id == mark_b.sheet_id:
+        return Response({'error': 'Cannot link marks on the same sheet'}, status=400)
+
+    # Bidirectional link
+    mark_a.linked_mark = mark_b
+    mark_a.save(update_fields=['linked_mark'])
+    mark_b.linked_mark = mark_a
+    mark_b.save(update_fields=['linked_mark'])
+
+    return Response({
+        'mark_a': JoinMarkSerializer(mark_a).data,
+        'mark_b': JoinMarkSerializer(mark_b).data,
+    })
+
+
+@api_view(['POST'])
+def unlink_join_mark(request, pk):
+    """Unlink a join mark from its partner."""
+    jm = get_object_or_404(JoinMark, pk=pk)
+    partner = jm.linked_mark
+
+    jm.linked_mark = None
+    jm.save(update_fields=['linked_mark'])
+
+    if partner and partner.linked_mark_id == jm.pk:
+        partner.linked_mark = None
+        partner.save(update_fields=['linked_mark'])
+
+    return Response(JoinMarkSerializer(jm).data)
+
+
+@api_view(['POST'])
+def align_sheets_by_marks(request):
+    """
+    Snap-align sheet B to sheet A based on linked join marks.
+    Computes the offset so the two marks overlap on the canvas.
+    """
+    mark_a_id = request.data.get('mark_a')
+    mark_b_id = request.data.get('mark_b')
+
+    if not mark_a_id or not mark_b_id:
+        return Response({'error': 'mark_a and mark_b are required'}, status=400)
+
+    mark_a = get_object_or_404(JoinMark, pk=mark_a_id)
+    mark_b = get_object_or_404(JoinMark, pk=mark_b_id)
+
+    sheet_a = mark_a.sheet
+    sheet_b = mark_b.sheet
+
+    if sheet_a.pk == sheet_b.pk:
+        return Response({'error': 'Marks must be on different sheets'}, status=400)
+
+    new_offset = compute_alignment(
+        {'x': mark_a.x, 'y': mark_a.y},
+        {'offset_x': sheet_a.offset_x, 'offset_y': sheet_a.offset_y},
+        {'x': mark_b.x, 'y': mark_b.y},
+        {'offset_x': sheet_b.offset_x, 'offset_y': sheet_b.offset_y},
+    )
+
+    # Apply the preview flag — only save if requested
+    if request.data.get('apply', False):
+        sheet_b.offset_x = new_offset['offset_x']
+        sheet_b.offset_y = new_offset['offset_y']
+        sheet_b.save(update_fields=['offset_x', 'offset_y'])
+
+    return Response({
+        'sheet_id': sheet_b.pk,
+        'new_offset_x': new_offset['offset_x'],
+        'new_offset_y': new_offset['offset_y'],
+        'applied': request.data.get('apply', False),
+    })
 
 
 class AssetListCreate(generics.ListCreateAPIView):

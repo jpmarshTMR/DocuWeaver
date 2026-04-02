@@ -122,6 +122,20 @@ class Sheet(models.Model):
 
 class JoinMark(models.Model):
     """A join mark on a sheet that references another sheet."""
+    EDGE_CHOICES = [
+        ('top', 'Top'),
+        ('bottom', 'Bottom'),
+        ('left', 'Left'),
+        ('right', 'Right'),
+    ]
+    SHAPE_CHOICES = [
+        ('triangle', 'Triangle'),
+        ('diamond', 'Diamond'),
+        ('circle', 'Circle'),
+        ('arrow', 'Arrow'),
+        ('manual', 'Manual'),
+    ]
+
     sheet = models.ForeignKey(Sheet, on_delete=models.CASCADE, related_name='join_marks')
 
     # Position on sheet (in pixels)
@@ -129,7 +143,13 @@ class JoinMark(models.Model):
     y = models.FloatField()
 
     # Reference label (e.g., "JOIN TO SHEET B-3")
-    reference_label = models.CharField(max_length=255)
+    reference_label = models.CharField(max_length=255, blank=True, default='')
+
+    # Detection metadata
+    edge = models.CharField(max_length=10, choices=EDGE_CHOICES, blank=True, default='')
+    shape = models.CharField(max_length=10, choices=SHAPE_CHOICES, blank=True, default='manual')
+    confidence = models.FloatField(default=1.0, help_text="Detection confidence 0-1")
+    auto_detected = models.BooleanField(default=False)
 
     # Link to the matching join mark on another sheet
     linked_mark = models.ForeignKey(
@@ -141,7 +161,8 @@ class JoinMark(models.Model):
     )
 
     def __str__(self):
-        return f"{self.reference_label} at ({self.x}, {self.y})"
+        label = self.reference_label or f"{self.shape} ({self.edge})"
+        return f"{label} at ({self.x:.0f}, {self.y:.0f})"
 
 
 class AssetType(models.Model):

@@ -1449,6 +1449,16 @@
                     </div>
                 </div>
 
+                <!-- Join Marks -->
+                <div style="margin-top: 1rem;">
+                    <h4 style="margin-bottom: 0.5rem;">Join Marks</h4>
+                    <button id="detect-join-marks-btn" class="btn" style="width: 100%; margin-bottom: 0.5rem; font-size: 0.85rem;"
+                        onclick="if(window.DocuWeaver.state.selectedSheet) detectJoinMarks(window.DocuWeaver.state.selectedSheet.id)">
+                        Detect Join Marks
+                    </button>
+                    <div id="join-marks-list" style="max-height: 250px; overflow-y: auto;"></div>
+                </div>
+
                 <button class="btn btn-danger" style="width: 100%; margin-top: 1rem;" onclick="deleteSelectedSheet()">
                     Delete Sheet
                 </button>
@@ -1994,6 +2004,7 @@
 <script src="{% static 'js/editor/measurements.js' %}"></script>
 <script src="{% static 'js/editor/layers.js' %}"></script>
 <script src="{% static 'js/editor/imports.js' %}"></script>
+<script src="{% static 'js/editor/join_marks.js' %}"></script>
 <script src="{% static 'js/editor/sidebar.js' %}"></script>
 <script src="{% static 'js/editor/main.js' %}"></script>
 <script src="{% static 'js/editor/verify.js' %}"></script>

@@ -30,7 +30,8 @@
             width: containerRect.width,
             height: containerRect.height,
             backgroundColor: '#e0e0e0',
-            selection: false
+            selection: false,
+            fireMiddleClick: true
         });
         
         // Sync to legacy global

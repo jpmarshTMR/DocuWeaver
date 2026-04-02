@@ -157,6 +157,11 @@
             item.classList.remove('selected');
         });
 
+        // Clear join mark overlays
+        if (typeof clearJoinMarkOverlays === 'function') {
+            clearJoinMarkOverlays();
+        }
+
         document.getElementById('no-selection').style.display = 'block';
         document.getElementById('sheet-properties').style.display = 'none';
         document.getElementById('asset-properties').style.display = 'none';

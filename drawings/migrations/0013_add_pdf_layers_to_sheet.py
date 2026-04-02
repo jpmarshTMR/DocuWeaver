@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('drawings', '0012_unique_constraints_and_indexes'),
+        ('drawings', '0011_alter_layergroup_group_type'),
     ]
 
     operations = [

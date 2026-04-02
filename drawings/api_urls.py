@@ -14,6 +14,15 @@ urlpatterns = [
     path('sheets/<int:pk>/layers/', api_views.set_sheet_layers, name='sheet-layers'),
     path('sheets/<int:pk>/split/', api_views.split_sheet, name='sheet-split'),
 
+    # Join Marks
+    path('sheets/<int:pk>/detect-join-marks/', api_views.detect_sheet_join_marks, name='detect-join-marks'),
+    path('sheets/<int:pk>/join-marks/', api_views.list_sheet_join_marks, name='list-join-marks'),
+    path('sheets/<int:pk>/join-marks/create/', api_views.create_join_mark, name='create-join-mark'),
+    path('join-marks/<int:pk>/delete/', api_views.delete_join_mark, name='delete-join-mark'),
+    path('join-marks/<int:pk>/unlink/', api_views.unlink_join_mark, name='unlink-join-mark'),
+    path('join-marks/link/', api_views.link_join_marks, name='link-join-marks'),
+    path('join-marks/align/', api_views.align_sheets_by_marks, name='align-by-marks'),
+
     # Assets
     path('projects/<int:project_pk>/assets/', api_views.AssetListCreate.as_view(), name='asset-list'),
     path('assets/<int:pk>/', api_views.AssetDetail.as_view(), name='asset-detail'),

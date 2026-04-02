@@ -168,6 +168,12 @@
         
         renderPdfLayersUI(state.selectedSheet);
 
+        // Load and display join marks for this sheet
+        if (typeof refreshJoinMarks === 'function') {
+            refreshJoinMarks(state.selectedSheet.id);
+            renderJoinMarksList(state.selectedSheet.id);
+        }
+
         if (typeof updateContextTools === 'function') {
             updateContextTools();
         }
