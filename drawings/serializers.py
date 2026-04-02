@@ -1,5 +1,6 @@
 """DRF Serializers for drawings app."""
 from rest_framework import serializers
+from django.db.models import Count
 from .models import Project, Sheet, JoinMark, AssetType, Asset, AdjustmentLog, ImportBatch, Link, LayerGroup, MeasurementSet
 
 
@@ -27,9 +28,10 @@ class SheetSerializer(serializers.ModelSerializer):
             'cuts_json',
             'offset_x', 'offset_y', 'rotation', 'z_index',
             'layer_group',
+            'pdf_layers', 'visible_layers',
             'join_marks', 'created_at'
         ]
-        read_only_fields = ['project', 'rendered_image', 'image_width', 'image_height']
+        read_only_fields = ['project', 'rendered_image', 'image_width', 'image_height', 'pdf_layers']
 
     def validate_cuts_json(self, value):
         if not isinstance(value, list):
@@ -98,7 +100,7 @@ class AdjustmentLogSerializer(serializers.ModelSerializer):
 
 class ProjectSerializer(serializers.ModelSerializer):
     sheets = SheetSerializer(many=True, read_only=True)
-    asset_count = serializers.SerializerMethodField()
+    asset_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Project
@@ -111,24 +113,26 @@ class ProjectSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
 
-    def get_asset_count(self, obj):
-        return obj.assets.count()
+    @staticmethod
+    def annotate_queryset(queryset):
+        return queryset.annotate(asset_count=Count('assets'))
 
 
 class ProjectListSerializer(serializers.ModelSerializer):
     """Lighter serializer for list views."""
-    sheet_count = serializers.SerializerMethodField()
-    asset_count = serializers.SerializerMethodField()
+    sheet_count = serializers.IntegerField(read_only=True)
+    asset_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Project
         fields = ['id', 'name', 'description', 'sheet_count', 'asset_count', 'created_at']
 
-    def get_sheet_count(self, obj):
-        return obj.sheets.count()
-
-    def get_asset_count(self, obj):
-        return obj.assets.count()
+    @staticmethod
+    def annotate_queryset(queryset):
+        return queryset.annotate(
+            sheet_count=Count('sheets', distinct=True),
+            asset_count=Count('assets', distinct=True),
+        )
 
 
 class LinkSerializer(serializers.ModelSerializer):
@@ -189,3 +193,40 @@ class MeasurementSetSerializer(serializers.ModelSerializer):
             if not isinstance(pt, dict) or 'x' not in pt or 'y' not in pt:
                 raise serializers.ValidationError(f"points[{i}] must have x and y")
         return value
+
+
+class CalibrateProjectSerializer(serializers.Serializer):
+    """Validates calibration input for a project."""
+    VALID_COORD_UNITS = ('meters', 'degrees', 'gda94_geo', 'gda94_mga')
+
+    pixel_distance = serializers.FloatField(required=False)
+    real_distance = serializers.FloatField(required=False)
+    origin_x = serializers.FloatField(required=False)
+    origin_y = serializers.FloatField(required=False)
+    canvas_rotation = serializers.FloatField(required=False)
+    asset_rotation = serializers.FloatField(required=False)
+    ref_asset_id = serializers.CharField(required=False, max_length=100)
+    ref_pixel_x = serializers.FloatField(required=False)
+    ref_pixel_y = serializers.FloatField(required=False)
+    coord_unit = serializers.ChoiceField(choices=VALID_COORD_UNITS, required=False)
+    osm_enabled = serializers.BooleanField(required=False)
+    osm_opacity = serializers.FloatField(required=False, min_value=0.0, max_value=1.0)
+    osm_z_index = serializers.IntegerField(required=False)
+
+    def validate(self, data):
+        import math
+        for field in ('pixel_distance', 'real_distance', 'origin_x', 'origin_y',
+                      'canvas_rotation', 'asset_rotation', 'ref_pixel_x', 'ref_pixel_y',
+                      'osm_opacity'):
+            if field in data and not math.isfinite(data[field]):
+                raise serializers.ValidationError({field: f'{field} must be a finite number'})
+
+        if 'pixel_distance' in data or 'real_distance' in data:
+            if 'pixel_distance' not in data or 'real_distance' not in data:
+                raise serializers.ValidationError('Both pixel_distance and real_distance are required for scale calibration')
+            if data['real_distance'] <= 0:
+                raise serializers.ValidationError({'real_distance': 'Must be greater than 0'})
+            if data['pixel_distance'] <= 0:
+                raise serializers.ValidationError({'pixel_distance': 'Must be greater than 0'})
+
+        return data

@@ -17,7 +17,11 @@
     function renderSheetsOnCanvas() {
         const canvas = state.canvas;
         const sheets = state.sheets;
-        
+
+        // Remove existing sheet objects to prevent duplicates on reload
+        const existingSheetObjs = canvas.getObjects().filter(obj => obj.sheetData);
+        existingSheetObjs.forEach(obj => canvas.remove(obj));
+
         const sheetsToLoad = sheets.filter(s => s.rendered_image_url).length;
         let sheetsLoaded = 0;
 
@@ -162,6 +166,8 @@
         document.getElementById('sheet-rotation').value = state.selectedSheet.rotation;
         document.getElementById('sheet-zindex').value = state.selectedSheet.z_index;
         
+        renderPdfLayersUI(state.selectedSheet);
+
         if (typeof updateContextTools === 'function') {
             updateContextTools();
         }
@@ -399,6 +405,149 @@
         }
     }
     
+    // ==================== PDF Layer Control ====================
+
+    function renderPdfLayersUI(sheet) {
+        var section = document.getElementById('pdf-layers-section');
+        var container = document.getElementById('pdf-layers-list');
+        if (!section || !container) return;
+
+        if (!sheet.pdf_layers || sheet.pdf_layers.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+
+        section.style.display = 'block';
+        container.innerHTML = '';
+
+        // If visible_layers is empty, all layers are visible
+        var visibleSet = new Set(
+            sheet.visible_layers && sheet.visible_layers.length > 0
+                ? sheet.visible_layers
+                : sheet.pdf_layers.map(function(l) { return l.xref; })
+        );
+
+        sheet.pdf_layers.forEach(function(layer) {
+            var div = document.createElement('div');
+            div.style.cssText = 'display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0;';
+
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = visibleSet.has(layer.xref);
+            cb.dataset.xref = layer.xref;
+            cb.addEventListener('change', function() {
+                applyPdfLayerChanges(sheet);
+            });
+
+            var label = document.createElement('span');
+            label.textContent = layer.name;
+            label.style.fontSize = '0.85rem';
+
+            div.appendChild(cb);
+            div.appendChild(label);
+            container.appendChild(div);
+        });
+    }
+
+    async function applyPdfLayerChanges(sheet) {
+        var container = document.getElementById('pdf-layers-list');
+        if (!container) return;
+
+        var checkboxes = container.querySelectorAll('input[type="checkbox"]');
+        var visibleLayers = [];
+        checkboxes.forEach(function(cb) {
+            if (cb.checked) {
+                visibleLayers.push(parseInt(cb.dataset.xref));
+            }
+        });
+
+        try {
+            var response = await fetch('/api/sheets/' + sheet.id + '/layers/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': DW.getCSRFToken()
+                },
+                body: JSON.stringify({ visible_layers: visibleLayers })
+            });
+
+            if (response.ok) {
+                var updated = await response.json();
+                var index = state.sheets.findIndex(function(s) { return s.id === sheet.id; });
+                if (index >= 0) {
+                    state.sheets[index] = updated;
+                    state.selectedSheet = updated;
+                    window.selectedSheet = updated;
+                }
+
+                // Re-render just this sheet on canvas
+                var canvas = state.canvas;
+                var oldObj = canvas.getObjects().find(function(obj) {
+                    return obj.sheetData && obj.sheetData.id === sheet.id;
+                });
+
+                if (oldObj && updated.rendered_image_url) {
+                    fabric.Image.fromURL(updated.rendered_image_url + '?t=' + Date.now(), function(img) {
+                        img.set({
+                            left: oldObj.left,
+                            top: oldObj.top,
+                            angle: oldObj.angle,
+                            selectable: oldObj.selectable,
+                            evented: true,
+                            hasControls: false,
+                            hasBorders: false,
+                            lockScalingX: true,
+                            lockScalingY: true,
+                            lockUniScaling: true,
+                            lockRotation: false,
+                        });
+                        img.sheetData = updated;
+
+                        canvas.remove(oldObj);
+                        canvas.add(img);
+
+                        if (state.isPdfInverted) {
+                            if (!img.filters) img.filters = [];
+                            img.filters.push(new fabric.Image.filters.Invert());
+                            if (typeof applyFiltersPreservingSize === 'function') {
+                                applyFiltersPreservingSize(img);
+                            } else {
+                                img.applyFilters();
+                            }
+                        }
+
+                        if (updated.cuts_json && updated.cuts_json.length > 0) {
+                            state.sheetCutData[updated.id] = updated.cuts_json;
+                            if (typeof applyAllCuts === 'function') {
+                                applyAllCuts(img, updated.cuts_json);
+                            }
+                        }
+
+                        reorderSheetsByZIndex();
+                        canvas.renderAll();
+                    }, { crossOrigin: 'anonymous' });
+                }
+
+                DW.showToast('PDF layers updated', 'success');
+            } else {
+                DW.showToast('Failed to update layers', 'error');
+            }
+        } catch (error) {
+            console.error('Error updating PDF layers:', error);
+            DW.showToast('Error updating layers', 'error');
+        }
+    }
+
+    function toggleAllPdfLayers(on) {
+        var container = document.getElementById('pdf-layers-list');
+        if (!container || !state.selectedSheet) return;
+
+        container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+            cb.checked = on;
+        });
+        applyPdfLayerChanges(state.selectedSheet);
+    }
+
     // ==================== Public API ====================
     
     DW.sheets = {
@@ -412,9 +561,12 @@
         saveSheetRotation,
         saveSheetPosition,
         deleteSelectedSheet,
-        deleteSheet
+        deleteSheet,
+        renderPdfLayersUI,
+        applyPdfLayerChanges,
+        toggleAllPdfLayers
     };
-    
+
     // Expose globally for backward compatibility
     window.renderSheetsOnCanvas = renderSheetsOnCanvas;
     window.reorderSheetsByZIndex = reorderSheetsByZIndex;
@@ -427,6 +579,8 @@
     window.saveSheetPosition = saveSheetPosition;
     window.deleteSelectedSheet = deleteSelectedSheet;
     window.deleteSheet = deleteSheet;
+    window.renderPdfLayersUI = renderPdfLayersUI;
+    window.toggleAllPdfLayers = toggleAllPdfLayers;
     
     console.log('DocuWeaver sheets module loaded');
 })();

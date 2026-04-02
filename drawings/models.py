@@ -60,6 +60,12 @@ class Sheet(models.Model):
     )
     page_number = models.PositiveIntegerField(default=1, help_text="Page number within the PDF")
 
+    # PDF Optional Content Groups (layers)
+    pdf_layers = models.JSONField(default=list, blank=True,
+        help_text="Available OCG layers: [{xref: int, name: str}, ...]")
+    visible_layers = models.JSONField(default=list, blank=True,
+        help_text="List of visible layer xrefs (empty = all visible)")
+
     # Layer group for organizing sheets into folders
     layer_group = models.ForeignKey(
         'LayerGroup',
@@ -212,7 +218,7 @@ class Asset(models.Model):
     adjusted_y = models.FloatField(null=True, blank=True)
 
     # Flag to track if asset has been manually adjusted
-    is_adjusted = models.BooleanField(default=False)
+    is_adjusted = models.BooleanField(default=False, db_index=True)
 
     # Additional metadata from CSV
     metadata = models.JSONField(default=dict, blank=True)
@@ -222,7 +228,9 @@ class Asset(models.Model):
 
     class Meta:
         ordering = ['asset_id']
-        unique_together = ['project', 'asset_id']
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'asset_id'], name='unique_project_asset'),
+        ]
 
     def __str__(self):
         return f"{self.asset_id} - {self.name}"
@@ -298,7 +306,9 @@ class ColumnPreset(models.Model):
 
     class Meta:
         ordering = ['role', '-priority']
-        unique_together = ['role', 'column_name']
+        constraints = [
+            models.UniqueConstraint(fields=['role', 'column_name'], name='unique_role_column'),
+        ]
         verbose_name = "Column Preset"
         verbose_name_plural = "Column Presets"
 
@@ -342,7 +352,9 @@ class Link(models.Model):
 
     class Meta:
         ordering = ['link_id']
-        unique_together = ['project', 'link_id']
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'link_id'], name='unique_project_link'),
+        ]
 
     def __str__(self):
         return f"{self.link_id} - {self.name}"

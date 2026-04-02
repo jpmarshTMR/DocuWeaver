@@ -10,9 +10,26 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
+def get_pdf_layers(pdf_path):
+    """
+    Extract Optional Content Groups (layers) from a PDF.
+
+    Returns a list of dicts: [{xref: int, name: str}, ...]
+    """
+    doc = fitz.open(pdf_path)
+    try:
+        ocgs = doc.get_ocgs()  # {xref: {name, intent, on}}
+        layers = [{'xref': xref, 'name': info.get('name', f'Layer {xref}')}
+                  for xref, info in ocgs.items()]
+        return layers
+    finally:
+        doc.close()
+
+
 def render_pdf_page(sheet, dpi=150):
     """
     Render a PDF page to an image and save it to the sheet.
+    Respects visible_layers if set (empty list = all visible).
 
     Args:
         sheet: Sheet model instance
@@ -27,6 +44,23 @@ def render_pdf_page(sheet, dpi=150):
     if page_number >= len(doc):
         doc.close()
         raise ValueError(f"Page {sheet.page_number} does not exist in PDF (has {len(doc)} pages)")
+
+    # Extract layers on first render if not already set
+    if not sheet.pdf_layers:
+        ocgs = doc.get_ocgs()
+        if ocgs:
+            sheet.pdf_layers = [
+                {'xref': xref, 'name': info.get('name', f'Layer {xref}')}
+                for xref, info in ocgs.items()
+            ]
+
+    # Apply layer visibility if specified
+    if sheet.visible_layers and sheet.pdf_layers:
+        visible_set = set(sheet.visible_layers)
+        on_names = [l['name'] for l in sheet.pdf_layers if l['xref'] in visible_set]
+        off_names = [l['name'] for l in sheet.pdf_layers if l['xref'] not in visible_set]
+        if on_names or off_names:
+            doc.set_layer(-1, on=on_names, off=off_names)
 
     page = doc[page_number]
 
