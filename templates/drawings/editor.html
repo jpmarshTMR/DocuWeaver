@@ -1449,6 +1449,15 @@
                     </div>
                 </div>
 
+                <!-- North Arrow Alignment -->
+                <div style="margin-top: 1rem;">
+                    <button id="detect-north-btn" class="btn" style="width: 100%; font-size: 0.85rem;"
+                        onclick="if(window.DocuWeaver.state.selectedSheet) detectAndAlignNorth(window.DocuWeaver.state.selectedSheet.id)">
+                        Align to North Arrow
+                    </button>
+                    <div id="north-arrow-result" style="display:none;font-size:0.8rem;margin-top:0.3rem;" class="text-muted"></div>
+                </div>
+
                 <!-- Join Marks -->
                 <div style="margin-top: 1rem;">
                     <h4 style="margin-bottom: 0.5rem;">Join Marks</h4>

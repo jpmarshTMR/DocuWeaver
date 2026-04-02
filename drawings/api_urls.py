@@ -23,6 +23,9 @@ urlpatterns = [
     path('join-marks/link/', api_views.link_join_marks, name='link-join-marks'),
     path('join-marks/align/', api_views.align_sheets_by_marks, name='align-by-marks'),
 
+    # North Arrow Detection
+    path('sheets/<int:pk>/detect-north/', api_views.detect_north, name='detect-north'),
+
     # Assets
     path('projects/<int:project_pk>/assets/', api_views.AssetListCreate.as_view(), name='asset-list'),
     path('assets/<int:pk>/', api_views.AssetDetail.as_view(), name='asset-detail'),

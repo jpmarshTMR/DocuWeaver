@@ -23,6 +23,7 @@ from .services.pdf_processor import render_pdf_page, get_pdf_page_count
 from .services.csv_importer import import_assets_from_csv, import_links_from_csv
 from .services.export_service import export_sheet_with_overlays, generate_adjustment_report
 from .services.join_mark_detector import detect_join_marks, compute_alignment
+from .services.north_arrow_detector import detect_north_arrow
 
 
 class ProjectListCreate(generics.ListCreateAPIView):
@@ -88,6 +89,7 @@ class SheetListCreate(generics.ListCreateAPIView):
             return Response(self.get_serializer(first_sheet).data, status=status.HTTP_201_CREATED)
 
         created_sheets = []
+        SHEET_GAP = 50  # pixels between tiled sheets
 
         if page_count == 1:
             # Single page PDF - just render and return
@@ -104,6 +106,9 @@ class SheetListCreate(generics.ListCreateAPIView):
             render_pdf_page(first_sheet)
             created_sheets.append(first_sheet)
 
+            # Track cumulative x offset for end-to-end layout
+            next_x = first_sheet.image_width + SHEET_GAP
+
             # Create sheets for remaining pages
             for page_num in range(2, page_count + 1):
                 sheet_name = f"{base_name}-{str(page_num).zfill(width)}"
@@ -111,9 +116,11 @@ class SheetListCreate(generics.ListCreateAPIView):
                     project=project,
                     name=sheet_name,
                     pdf_file=first_sheet.pdf_file,  # Reuse the same PDF file
-                    page_number=page_num
+                    page_number=page_num,
+                    offset_x=next_x,
                 )
                 render_pdf_page(sheet)
+                next_x += sheet.image_width + SHEET_GAP
                 created_sheets.append(sheet)
 
         # Return all created sheets
@@ -333,6 +340,48 @@ def align_sheets_by_marks(request):
         'new_offset_x': new_offset['offset_x'],
         'new_offset_y': new_offset['offset_y'],
         'applied': request.data.get('apply', False),
+    })
+
+
+# ==================== North Arrow Detection ====================
+
+@api_view(['POST'])
+def detect_north(request, pk):
+    """Detect the north arrow on a sheet and optionally auto-rotate."""
+    sheet = get_object_or_404(Sheet, pk=pk)
+
+    if not sheet.rendered_image:
+        return Response({'error': 'Sheet has no rendered image'}, status=400)
+
+    try:
+        result = detect_north_arrow(sheet.rendered_image.path)
+    except Exception as e:
+        logger.error("North arrow detection failed for sheet %d: %s", pk, e)
+        return Response({'error': 'Detection failed'}, status=500)
+
+    if result is None:
+        return Response({
+            'detected': False,
+            'message': 'No north arrow found on this sheet',
+        })
+
+    apply_rotation = request.data.get('apply', False)
+
+    if apply_rotation:
+        sheet.rotation = (sheet.rotation + result['correction']) % 360
+        sheet.save(update_fields=['rotation'])
+
+    serializer = SheetSerializer(sheet, context={'request': request})
+    return Response({
+        'detected': True,
+        'arrow_angle': result['angle'],
+        'correction': result['correction'],
+        'arrow_x': result['x'],
+        'arrow_y': result['y'],
+        'confidence': result['confidence'],
+        'method': result['method'],
+        'applied': apply_rotation,
+        'sheet': serializer.data,
     })
 
 

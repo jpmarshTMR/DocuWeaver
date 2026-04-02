@@ -30,10 +30,6 @@
                 fabric.Image.fromURL(sheet.rendered_image_url, function(img) {
                     let left = sheet.offset_x;
                     let top = sheet.offset_y;
-                    if (left === 0 && top === 0 && index > 0) {
-                        left = index * 50;
-                        top = index * 50;
-                    }
 
                     img.set({
                         left: left,
@@ -411,6 +407,75 @@
         }
     }
     
+    // ==================== North Arrow Detection ====================
+
+    async function detectAndAlignNorth(sheetId) {
+        if (!sheetId) return;
+
+        var btn = document.getElementById('detect-north-btn');
+        var resultDiv = document.getElementById('north-arrow-result');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Detecting...';
+        }
+
+        try {
+            var response = await fetch('/api/sheets/' + sheetId + '/detect-north/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': DW.getCSRFToken()
+                },
+                body: JSON.stringify({ apply: true })
+            });
+
+            if (response.ok) {
+                var result = await response.json();
+
+                if (result.detected) {
+                    var conf = (result.confidence * 100).toFixed(0);
+                    var correction = result.correction.toFixed(1);
+
+                    if (resultDiv) {
+                        resultDiv.style.display = 'block';
+                        resultDiv.textContent = 'Rotated ' + correction + '\u00B0 (' + conf + '% confidence)';
+                    }
+
+                    // Update local state
+                    var sheet = state.sheets.find(function(s) { return s.id === sheetId; });
+                    if (sheet && result.sheet) {
+                        sheet.rotation = result.sheet.rotation;
+                        if (state.selectedSheet && state.selectedSheet.id === sheetId) {
+                            state.selectedSheet = sheet;
+                            document.getElementById('sheet-rotation').value = sheet.rotation;
+                        }
+                    }
+
+                    // Update canvas
+                    updateSheetOnCanvas(sheetId, 'rotation', result.sheet.rotation);
+
+                    DW.showToast('North arrow detected, sheet rotated ' + correction + '\u00B0', 'success');
+                } else {
+                    if (resultDiv) {
+                        resultDiv.style.display = 'block';
+                        resultDiv.textContent = 'No north arrow found';
+                    }
+                    DW.showToast('No north arrow found on this sheet', 'info');
+                }
+            } else {
+                DW.showToast('Detection failed', 'error');
+            }
+        } catch (error) {
+            console.error('North arrow detection error:', error);
+            DW.showToast('Detection error', 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Align to North Arrow';
+            }
+        }
+    }
+
     // ==================== PDF Layer Control ====================
 
     function renderPdfLayersUI(sheet) {
@@ -570,7 +635,8 @@
         deleteSheet,
         renderPdfLayersUI,
         applyPdfLayerChanges,
-        toggleAllPdfLayers
+        toggleAllPdfLayers,
+        detectAndAlignNorth
     };
 
     // Expose globally for backward compatibility
@@ -587,6 +653,7 @@
     window.deleteSheet = deleteSheet;
     window.renderPdfLayersUI = renderPdfLayersUI;
     window.toggleAllPdfLayers = toggleAllPdfLayers;
+    window.detectAndAlignNorth = detectAndAlignNorth;
     
     console.log('DocuWeaver sheets module loaded');
 })();
