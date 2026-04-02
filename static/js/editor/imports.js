@@ -401,38 +401,70 @@
         if (uploadForm) {
             uploadForm.addEventListener('submit', async function(e) {
                 e.preventDefault();
-                var formData = new FormData(this);
                 var form = this;
+                var fileInput = form.querySelector('input[type="file"]');
+                var files = Array.from(fileInput.files);
 
-                try {
-                    var response = await fetch('/api/projects/' + PROJECT_ID + '/sheets/', {
-                        method: 'POST',
-                        headers: {
-                            'X-CSRFToken': DW.getCSRFToken()
-                        },
-                        body: formData
-                    });
+                if (files.length === 0) return;
 
-                    if (response.ok) {
-                        var result = await response.json();
-                        hideUploadModal();
+                var uploadBtn = document.getElementById('uploadBtn');
+                var progressDiv = document.getElementById('uploadProgress');
+                var currentSpan = document.getElementById('uploadCurrent');
+                var totalSpan = document.getElementById('uploadTotal');
 
-                        if (Array.isArray(result)) {
-                            var count = result.length;
-                            if (count > 1) {
-                                alert('PDF imported successfully! Created ' + count + ' sheets (one per page).');
-                            }
+                uploadBtn.disabled = true;
+                progressDiv.style.display = 'block';
+                totalSpan.textContent = files.length;
+
+                var totalSheets = 0;
+                var errors = [];
+
+                for (var i = 0; i < files.length; i++) {
+                    currentSpan.textContent = i + 1;
+                    var file = files[i];
+
+                    // Derive sheet name from filename (strip .pdf extension)
+                    var name = file.name.replace(/\.pdf$/i, '');
+
+                    var formData = new FormData();
+                    formData.append('pdf_file', file);
+                    formData.append('name', name);
+
+                    try {
+                        var response = await fetch('/api/projects/' + PROJECT_ID + '/sheets/', {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': DW.getCSRFToken()
+                            },
+                            body: formData
+                        });
+
+                        if (response.ok) {
+                            var result = await response.json();
+                            totalSheets += Array.isArray(result) ? result.length : 1;
+                        } else {
+                            var error = await response.json();
+                            errors.push(file.name + ': ' + JSON.stringify(error));
                         }
-
-                        if (typeof loadProjectData === 'function') loadProjectData();
-                        form.reset();
-                    } else {
-                        var error = await response.json();
-                        alert('Error: ' + JSON.stringify(error));
+                    } catch (error) {
+                        console.error('Upload error for ' + file.name + ':', error);
+                        errors.push(file.name + ': ' + error.message);
                     }
-                } catch (error) {
-                    console.error('Upload error:', error);
                 }
+
+                hideUploadModal();
+                uploadBtn.disabled = false;
+                progressDiv.style.display = 'none';
+
+                if (errors.length > 0) {
+                    alert('Some uploads failed:\n' + errors.join('\n'));
+                }
+
+                if (totalSheets > 0) {
+                    if (typeof loadProjectData === 'function') loadProjectData();
+                }
+
+                form.reset();
             });
         }
 
