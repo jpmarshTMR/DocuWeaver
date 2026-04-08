@@ -5,6 +5,7 @@ import logging
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse, HttpResponse
 from django.db import transaction
+from django.db.models import Count
 from rest_framework import generics, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -15,7 +16,8 @@ logger = logging.getLogger(__name__)
 from .serializers import (
     ProjectSerializer, ProjectListSerializer,
     SheetSerializer, AssetSerializer, AdjustmentLogSerializer,
-    ImportBatchSerializer, LinkSerializer, LayerGroupSerializer, MeasurementSetSerializer
+    ImportBatchSerializer, LinkSerializer, LayerGroupSerializer, MeasurementSetSerializer,
+    CalibrateProjectSerializer,
 )
 from .services.pdf_processor import render_pdf_page, get_pdf_page_count
 from .services.csv_importer import import_assets_from_csv, import_links_from_csv
@@ -23,7 +25,11 @@ from .services.export_service import export_sheet_with_overlays, generate_adjust
 
 
 class ProjectListCreate(generics.ListCreateAPIView):
-    queryset = Project.objects.all()
+    def get_queryset(self):
+        qs = Project.objects.all()
+        if self.request.method == 'GET':
+            return ProjectListSerializer.annotate_queryset(qs)
+        return qs
 
     def get_serializer_class(self):
         if self.request.method == 'GET':
@@ -32,15 +38,19 @@ class ProjectListCreate(generics.ListCreateAPIView):
 
 
 class ProjectDetail(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Project.objects.all()
     serializer_class = ProjectSerializer
+
+    def get_queryset(self):
+        return ProjectSerializer.annotate_queryset(Project.objects.all())
 
 
 class SheetListCreate(generics.ListCreateAPIView):
     serializer_class = SheetSerializer
 
     def get_queryset(self):
-        return Sheet.objects.filter(project_id=self.kwargs['project_pk'])
+        return Sheet.objects.filter(
+            project_id=self.kwargs['project_pk']
+        ).select_related('layer_group').prefetch_related('join_marks')
 
     def create(self, request, *args, **kwargs):
         """
@@ -49,14 +59,22 @@ class SheetListCreate(generics.ListCreateAPIView):
         """
         project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
         pdf_file = request.FILES.get('pdf_file')
-        base_name = request.data.get('name', 'Sheet')
+        # Use provided name, or derive from PDF filename
+        base_name = request.data.get('name', '').strip()
+        if not base_name and pdf_file:
+            import os
+            base_name = os.path.splitext(pdf_file.name)[0]
+        if not base_name:
+            base_name = 'Sheet'
 
         if not pdf_file:
             return Response({'error': 'No PDF file provided'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Save the file temporarily to get page count
         # First, create the initial sheet to save the file
-        serializer = self.get_serializer(data=request.data)
+        data = request.data.copy()
+        data['name'] = base_name
+        serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         first_sheet = serializer.save(project=project, page_number=1)
 
@@ -101,13 +119,6 @@ class SheetListCreate(generics.ListCreateAPIView):
         response_serializer = self.get_serializer(created_sheets, many=True)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
-    def perform_create(self, serializer):
-        # This is kept for compatibility but create() now handles the logic
-        project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
-        sheet = serializer.save(project=project)
-        render_pdf_page(sheet)
-
-
 class SheetDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Sheet.objects.all()
     serializer_class = SheetSerializer
@@ -130,11 +141,37 @@ def render_sheet(request, pk):
         return Response({'status': 'error', 'message': 'Failed to render sheet'}, status=500)
 
 
+@api_view(['POST'])
+def set_sheet_layers(request, pk):
+    """Update visible layers for a sheet and re-render."""
+    sheet = get_object_or_404(Sheet, pk=pk)
+
+    visible_layers = request.data.get('visible_layers')
+    if visible_layers is None:
+        return Response({'error': 'visible_layers is required'}, status=400)
+
+    if not isinstance(visible_layers, list):
+        return Response({'error': 'visible_layers must be a list of xref integers'}, status=400)
+
+    sheet.visible_layers = visible_layers
+    sheet.save(update_fields=['visible_layers'])
+
+    try:
+        render_pdf_page(sheet)
+        serializer = SheetSerializer(sheet, context={'request': request})
+        return Response(serializer.data)
+    except Exception as e:
+        logger.error("Failed to re-render sheet %d with layers: %s", pk, e)
+        return Response({'status': 'error', 'message': 'Failed to render sheet with layer changes'}, status=500)
+
+
 class AssetListCreate(generics.ListCreateAPIView):
     serializer_class = AssetSerializer
 
     def get_queryset(self):
-        return Asset.objects.filter(project_id=self.kwargs['project_pk'])
+        return Asset.objects.filter(
+            project_id=self.kwargs['project_pk']
+        ).select_related('asset_type', 'import_batch', 'layer_group')
 
     def perform_create(self, serializer):
         project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
@@ -258,8 +295,12 @@ def adjustment_report(request, project_pk):
     project = get_object_or_404(Project, pk=project_pk)
     format_type = request.query_params.get('format', 'json')
 
-    adjusted_assets = project.assets.filter(is_adjusted=True)
-    logs = AdjustmentLog.objects.filter(asset__project=project).order_by('-timestamp')
+    adjusted_assets = project.assets.filter(is_adjusted=True).annotate(
+        adjustment_count=Count('adjustment_logs')
+    )
+    logs = AdjustmentLog.objects.filter(
+        asset__project=project
+    ).select_related('asset').order_by('-timestamp')
 
     if format_type == 'csv':
         return generate_adjustment_report(project, adjusted_assets, logs, format_type='csv')
@@ -280,7 +321,7 @@ def adjustment_report(request, project_pk):
             'original': {'x': asset.original_x, 'y': asset.original_y},
             'adjusted': {'x': asset.adjusted_x, 'y': asset.adjusted_y},
             'delta_distance': asset.delta_distance,
-            'adjustment_count': asset.adjustment_logs.count()
+            'adjustment_count': asset.adjustment_count,
         })
 
     return Response(report)
@@ -351,101 +392,28 @@ def calibrate_project(request, pk):
     """Set scale calibration for a project."""
     project = get_object_or_404(Project, pk=pk)
 
-    # For scale calibration: provide two pixel points and the real-world distance
-    pixel_distance = request.data.get('pixel_distance')
-    real_distance = request.data.get('real_distance')  # in meters
+    serializer = CalibrateProjectSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'error': serializer.errors}, status=400)
 
-    if pixel_distance is not None and real_distance is not None:
-        try:
-            pixel_distance = _parse_finite_float(pixel_distance, 'pixel_distance')
-            real_distance = _parse_finite_float(real_distance, 'real_distance')
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
+    data = serializer.validated_data
 
-        if real_distance <= 0:
-            return Response({'error': 'real_distance must be greater than 0'}, status=400)
-        if pixel_distance <= 0:
-            return Response({'error': 'pixel_distance must be greater than 0'}, status=400)
-
-        project.pixels_per_meter = pixel_distance / real_distance
+    # Scale calibration
+    if 'pixel_distance' in data and 'real_distance' in data:
+        project.pixels_per_meter = data['pixel_distance'] / data['real_distance']
         project.scale_calibrated = True
         logger.info("Project %d calibrated: %.2f px/m (pixel_dist=%.2f, real_dist=%.2f)",
-                     project.pk, project.pixels_per_meter, pixel_distance, real_distance)
+                     project.pk, project.pixels_per_meter, data['pixel_distance'], data['real_distance'])
 
-    # For origin setting
-    origin_x = request.data.get('origin_x')
-    origin_y = request.data.get('origin_y')
-
-    try:
-        if origin_x is not None:
-            project.origin_x = _parse_finite_float(origin_x, 'origin_x')
-        if origin_y is not None:
-            project.origin_y = _parse_finite_float(origin_y, 'origin_y')
-    except ValueError as e:
-        return Response({'error': str(e)}, status=400)
-
-    # For viewport rotation
-    canvas_rotation = request.data.get('canvas_rotation')
-    if canvas_rotation is not None:
-        try:
-            project.canvas_rotation = _parse_finite_float(canvas_rotation, 'canvas_rotation')
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-
-    # Asset layer calibration
-    asset_rotation = request.data.get('asset_rotation')
-    if asset_rotation is not None:
-        try:
-            project.asset_rotation = _parse_finite_float(asset_rotation, 'asset_rotation')
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-
-    ref_asset_id = request.data.get('ref_asset_id')
-    if ref_asset_id is not None:
-        project.ref_asset_id = str(ref_asset_id)[:100]
-
-    try:
-        ref_pixel_x = request.data.get('ref_pixel_x')
-        ref_pixel_y = request.data.get('ref_pixel_y')
-        if ref_pixel_x is not None:
-            project.ref_pixel_x = _parse_finite_float(ref_pixel_x, 'ref_pixel_x')
-        if ref_pixel_y is not None:
-            project.ref_pixel_y = _parse_finite_float(ref_pixel_y, 'ref_pixel_y')
-    except ValueError as e:
-        return Response({'error': str(e)}, status=400)
-
-    # Coordinate unit setting
-    coord_unit = request.data.get('coord_unit')
-    if coord_unit is not None:
-        valid_units = ('meters', 'degrees', 'gda94_geo', 'gda94_mga')
-        if coord_unit in valid_units:
-            project.coord_unit = coord_unit
-        else:
-            return Response({'error': f'coord_unit must be one of: {", ".join(valid_units)}'}, status=400)
-
-    # OpenStreetMap layer settings
-    osm_enabled = request.data.get('osm_enabled')
-    if osm_enabled is not None:
-        project.osm_enabled = bool(osm_enabled)
-    
-    osm_opacity = request.data.get('osm_opacity')
-    if osm_opacity is not None:
-        try:
-            opacity = _parse_finite_float(osm_opacity, 'osm_opacity')
-            if 0.0 <= opacity <= 1.0:
-                project.osm_opacity = opacity
-            else:
-                return Response({'error': 'osm_opacity must be between 0.0 and 1.0'}, status=400)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-    
-    osm_z_index = request.data.get('osm_z_index')
-    if osm_z_index is not None:
-        try:
-            z_idx = int(osm_z_index)
-            project.osm_z_index = z_idx
-        except (ValueError, TypeError):
-            return Response({'error': 'osm_z_index must be an integer'}, status=400)
+    # Apply simple field updates
+    simple_fields = (
+        'origin_x', 'origin_y', 'canvas_rotation', 'asset_rotation',
+        'ref_asset_id', 'ref_pixel_x', 'ref_pixel_y', 'coord_unit',
+        'osm_enabled', 'osm_opacity', 'osm_z_index',
+    )
+    for field in simple_fields:
+        if field in data:
+            setattr(project, field, data[field])
 
     project.save()
 
@@ -532,7 +500,9 @@ class LinkListCreate(generics.ListCreateAPIView):
     serializer_class = LinkSerializer
 
     def get_queryset(self):
-        return Link.objects.filter(project_id=self.kwargs['project_pk'])
+        return Link.objects.filter(
+            project_id=self.kwargs['project_pk']
+        ).select_related('import_batch', 'layer_group')
 
     def perform_create(self, serializer):
         project = get_object_or_404(Project, pk=self.kwargs['project_pk'])
@@ -583,7 +553,9 @@ class LayerGroupListCreate(generics.ListCreateAPIView):
     serializer_class = LayerGroupSerializer
 
     def get_queryset(self):
-        queryset = LayerGroup.objects.filter(project_id=self.kwargs['project_pk'])
+        queryset = LayerGroup.objects.filter(
+            project_id=self.kwargs['project_pk']
+        ).prefetch_related('child_groups')
         # Filter by group_type if specified
         group_type = self.request.query_params.get('type')
         if group_type in ('asset', 'link', 'sheet'):
@@ -622,9 +594,12 @@ def join_groups(request, project_pk):
     if parent_id == child_id:
         return Response({'error': 'Cannot join a group to itself'}, status=400)
 
-    # Prevent circular references
-    if parent.parent_group and parent.parent_group.id == child.id:
-        return Response({'error': 'Cannot create circular group reference'}, status=400)
+    # Prevent circular references by walking the full ancestor chain
+    ancestor = parent
+    while ancestor:
+        if ancestor.id == child.id:
+            return Response({'error': 'Cannot create circular group reference'}, status=400)
+        ancestor = ancestor.parent_group
 
     child.parent_group = parent
     child.save()
@@ -675,85 +650,74 @@ def toggle_group_visibility(request, pk):
     })
 
 
+# Model lookup for layer group item operations
+ITEM_TYPE_MODELS = {
+    'asset': (Asset, 'asset'),
+    'link': (Link, 'link'),
+    'sheet': (Sheet, 'sheet'),
+    'measurement': (MeasurementSet, 'measurement'),
+}
+
+VALID_ITEM_TYPES = '"asset", "link", "sheet", or "measurement"'
+
+
+def _validate_item_type_for_group(group, item_type):
+    """Check if item_type is compatible with a group's scope and type."""
+    if group.scope == 'global':
+        return True
+    return group.group_type == item_type
+
+
+def _update_items_for_types(types, filter_kwargs, update_kwargs):
+    """Run an update across one or more item types. Returns total count."""
+    count = 0
+    for type_name in types:
+        model, _ = ITEM_TYPE_MODELS[type_name]
+        count += model.objects.filter(**filter_kwargs).update(**update_kwargs)
+    return count
+
+
 @api_view(['PATCH'])
 def move_item_to_group(request, pk):
     """Move an asset, link, sheet, or measurement to a different group."""
     group = get_object_or_404(LayerGroup, pk=pk)
-    item_type = request.data.get('item_type')  # 'asset', 'link', 'sheet', or 'measurement'
+    item_type = request.data.get('item_type')
     item_id = request.data.get('item_id')
 
     if not item_type or not item_id:
         return Response({'error': 'item_type and item_id are required'}, status=400)
 
-    # Global folders can accept any item type
-    is_global = group.scope == 'global'
+    if item_type not in ITEM_TYPE_MODELS:
+        return Response({'error': f'item_type must be {VALID_ITEM_TYPES}'}, status=400)
 
-    if item_type == 'asset':
-        if not is_global and group.group_type != 'asset':
-            return Response({'error': 'Cannot move asset to a non-asset local group'}, status=400)
-        item = get_object_or_404(Asset, pk=item_id, project=group.project)
-        item.layer_group = group
-        item.save()
-        return Response({'status': 'moved', 'item_type': 'asset', 'item_id': item_id, 'group_id': pk})
-    elif item_type == 'link':
-        if not is_global and group.group_type != 'link':
-            return Response({'error': 'Cannot move link to a non-link local group'}, status=400)
-        item = get_object_or_404(Link, pk=item_id, project=group.project)
-        item.layer_group = group
-        item.save()
-        return Response({'status': 'moved', 'item_type': 'link', 'item_id': item_id, 'group_id': pk})
-    elif item_type == 'sheet':
-        if not is_global and group.group_type != 'sheet':
-            return Response({'error': 'Cannot move sheet to a non-sheet local group'}, status=400)
-        item = get_object_or_404(Sheet, pk=item_id, project=group.project)
-        item.layer_group = group
-        item.save()
-        return Response({'status': 'moved', 'item_type': 'sheet', 'item_id': item_id, 'group_id': pk})
-    elif item_type == 'measurement':
-        if not is_global and group.group_type != 'measurement':
-            return Response({'error': 'Cannot move measurement to a non-measurement local group'}, status=400)
-        item = get_object_or_404(MeasurementSet, pk=item_id, project=group.project)
-        item.layer_group = group
-        item.save()
-        return Response({'status': 'moved', 'item_type': 'measurement', 'item_id': item_id, 'group_id': pk})
-    else:
-        return Response({'error': 'item_type must be "asset", "link", "sheet", or "measurement"'}, status=400)
+    if not _validate_item_type_for_group(group, item_type):
+        return Response({'error': f'Cannot move {item_type} to a non-{item_type} local group'}, status=400)
+
+    model, _ = ITEM_TYPE_MODELS[item_type]
+    item = get_object_or_404(model, pk=item_id, project=group.project)
+    item.layer_group = group
+    item.save()
+    return Response({'status': 'moved', 'item_type': item_type, 'item_id': item_id, 'group_id': pk})
 
 
 @api_view(['POST'])
 def assign_ungrouped_to_group(request, pk):
     """Assign all ungrouped items of a type to this group."""
     group = get_object_or_404(LayerGroup, pk=pk)
-    item_type = request.data.get('item_type')  # 'asset', 'link', 'sheet', or 'measurement'
+    item_type = request.data.get('item_type')
 
     if not item_type:
         return Response({'error': 'item_type is required'}, status=400)
 
-    # Global folders can accept any item type
-    is_global = group.scope == 'global'
+    if item_type not in ITEM_TYPE_MODELS:
+        return Response({'error': f'item_type must be {VALID_ITEM_TYPES}'}, status=400)
 
-    if item_type == 'asset':
-        if not is_global and group.group_type != 'asset':
-            return Response({'error': 'Cannot assign assets to a non-asset local group'}, status=400)
-        count = Asset.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
-        return Response({'status': 'assigned', 'count': count, 'item_type': 'asset'})
-    elif item_type == 'link':
-        if not is_global and group.group_type != 'link':
-            return Response({'error': 'Cannot assign links to a non-link local group'}, status=400)
-        count = Link.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
-        return Response({'status': 'assigned', 'count': count, 'item_type': 'link'})
-    elif item_type == 'sheet':
-        if not is_global and group.group_type != 'sheet':
-            return Response({'error': 'Cannot assign sheets to a non-sheet local group'}, status=400)
-        count = Sheet.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
-        return Response({'status': 'assigned', 'count': count, 'item_type': 'sheet'})
-    elif item_type == 'measurement':
-        if not is_global and group.group_type != 'measurement':
-            return Response({'error': 'Cannot assign measurements to a non-measurement local group'}, status=400)
-        count = MeasurementSet.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
-        return Response({'status': 'assigned', 'count': count, 'item_type': 'measurement'})
-    else:
-        return Response({'error': 'item_type must be "asset", "link", "sheet", or "measurement"'}, status=400)
+    if not _validate_item_type_for_group(group, item_type):
+        return Response({'error': f'Cannot assign {item_type}s to a non-{item_type} local group'}, status=400)
+
+    model, _ = ITEM_TYPE_MODELS[item_type]
+    count = model.objects.filter(project=group.project, layer_group__isnull=True).update(layer_group=group)
+    return Response({'status': 'assigned', 'count': count, 'item_type': item_type})
 
 
 @api_view(['POST'])
@@ -761,65 +725,42 @@ def ungroup_all_items(request, pk):
     """Remove all items from a group (make them ungrouped)."""
     group = get_object_or_404(LayerGroup, pk=pk)
 
-    # For global folders, ungroup all types; for local folders, only that type
     if group.scope == 'global':
-        count = 0
-        count += Asset.objects.filter(layer_group=group).update(layer_group=None)
-        count += Link.objects.filter(layer_group=group).update(layer_group=None)
-        count += Sheet.objects.filter(layer_group=group).update(layer_group=None)
-        count += MeasurementSet.objects.filter(layer_group=group).update(layer_group=None)
-    elif group.group_type == 'asset':
-        count = Asset.objects.filter(layer_group=group).update(layer_group=None)
-    elif group.group_type == 'sheet':
-        count = Sheet.objects.filter(layer_group=group).update(layer_group=None)
-    elif group.group_type == 'measurement':
-        count = MeasurementSet.objects.filter(layer_group=group).update(layer_group=None)
+        types = list(ITEM_TYPE_MODELS.keys())
     else:
-        count = Link.objects.filter(layer_group=group).update(layer_group=None)
+        types = [group.group_type]
 
+    count = _update_items_for_types(types, {'layer_group': group}, {'layer_group': None})
     return Response({'status': 'ungrouped', 'count': count})
 
 
 @api_view(['POST'])
 def move_contents_to_folder(request, pk):
     """Move all items from one folder to another folder (or to ungrouped).
-    
+
     If item_type is specified, only moves items of that type (respects the view context).
     If item_type is not specified AND source is a global folder, moves all types (Unified view).
     """
     source_group = get_object_or_404(LayerGroup, pk=pk)
     target_group_id = request.data.get('target_group')  # None means ungrouped
-    item_type = request.data.get('item_type')  # asset, link, sheet, measurement, or None for all
-    
+    item_type = request.data.get('item_type')
+
     # Get target group if specified
     target_group = None
     if target_group_id:
         target_group = get_object_or_404(LayerGroup, pk=target_group_id)
-        # Verify target is in same project
         if target_group.project_id != source_group.project_id:
             return Response({'error': 'Target folder must be in the same project'}, status=400)
-    
-    # Move items based on type
-    # IMPORTANT: Always respect item_type if provided, even for global folders
-    # This ensures the UI context (which tab the user is on) is honored
-    count = 0
-    
-    if item_type == 'asset':
-        count = Asset.objects.filter(layer_group=source_group).update(layer_group=target_group)
-    elif item_type == 'sheet':
-        count = Sheet.objects.filter(layer_group=source_group).update(layer_group=target_group)
-    elif item_type == 'measurement':
-        count = MeasurementSet.objects.filter(layer_group=source_group).update(layer_group=target_group)
-    elif item_type == 'link':
-        count = Link.objects.filter(layer_group=source_group).update(layer_group=target_group)
+
+    # Determine which types to move
+    if item_type in ITEM_TYPE_MODELS:
+        types = [item_type]
     elif item_type is None or item_type == 'all':
-        # Only move all types if explicitly requested (Unified view) or no type specified
-        count += Asset.objects.filter(layer_group=source_group).update(layer_group=target_group)
-        count += Link.objects.filter(layer_group=source_group).update(layer_group=target_group)
-        count += Sheet.objects.filter(layer_group=source_group).update(layer_group=target_group)
-        count += MeasurementSet.objects.filter(layer_group=source_group).update(layer_group=target_group)
+        types = list(ITEM_TYPE_MODELS.keys())
     else:
         return Response({'error': 'Invalid item_type'}, status=400)
+
+    count = _update_items_for_types(types, {'layer_group': source_group}, {'layer_group': target_group})
 
     return Response({
         'status': 'moved',
